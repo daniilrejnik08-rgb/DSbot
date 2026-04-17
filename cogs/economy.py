@@ -28,12 +28,26 @@ class Economy(commands.Cog):
             "суперсемя": 2500,
             "VIP-карта": 5000,
         }
+        self._abuse_freeze_until: dict[int, float] = {}
 
     def get_user_data(self, guild_id: int, user_id: int) -> dict:
         return Wallet.get(guild_id, user_id)
 
     def save_user_data(self, guild_id: int, user_id: int, data: dict):
         Wallet.save(guild_id, user_id, data)
+
+    def _abuse_check(self, user_id: int, data: dict) -> str | None:
+        now = time.time()
+        frozen_to = self._abuse_freeze_until.get(user_id, 0.0)
+        if frozen_to > now:
+            remain = int((frozen_to - now) // 60) + 1
+            return f"🚫 Аккаунт временно ограничен анти-абузом. Повторите через {remain} мин."
+
+        suspicion = int(data.get("suspicion", 0))
+        if suspicion >= 15:
+            self._abuse_freeze_until[user_id] = now + 60 * 30
+            return "🚫 Выявлена подозрительная активность. Экономика заморожена на 30 минут."
+        return None
 
     @app_commands.command(name="balance", description="Проверить баланс")
     async def balance(self, interaction: discord.Interaction, member: discord.Member | None = None):
@@ -49,6 +63,10 @@ class Economy(commands.Cog):
     @app_commands.command(name="daily", description="Получить ежедневный бонус")
     async def daily(self, interaction: discord.Interaction):
         data = self.get_user_data(interaction.guild.id, interaction.user.id)
+        blocked = self._abuse_check(interaction.user.id, data)
+        if blocked:
+            await interaction.response.send_message(blocked, ephemeral=True)
+            return
         if data["last_daily"]:
             last = datetime.fromisoformat(data["last_daily"])
             if datetime.now() - last < timedelta(hours=24):
@@ -68,6 +86,10 @@ class Economy(commands.Cog):
     @app_commands.command(name="work", description="Заработать деньги работой")
     async def work(self, interaction: discord.Interaction):
         data = self.get_user_data(interaction.guild.id, interaction.user.id)
+        blocked = self._abuse_check(interaction.user.id, data)
+        if blocked:
+            await interaction.response.send_message(blocked, ephemeral=True)
+            return
         if data["last_work"]:
             last = datetime.fromisoformat(data["last_work"])
             if datetime.now() - last < timedelta(minutes=35):
@@ -103,6 +125,10 @@ class Economy(commands.Cog):
             await interaction.response.send_message("🚫 Лимит переводов: подождите несколько минут", ephemeral=True)
             return
         sender = self.get_user_data(interaction.guild.id, interaction.user.id)
+        blocked = self._abuse_check(interaction.user.id, sender)
+        if blocked:
+            await interaction.response.send_message(blocked, ephemeral=True)
+            return
         if sender["balance"] < amount:
             await interaction.response.send_message("❌ Недостаточно средств", ephemeral=True)
             return
@@ -114,6 +140,10 @@ class Economy(commands.Cog):
         receiver["balance"] += transfer
         if amount >= 50000:
             sender["suspicion"] = sender.get("suspicion", 0) + 1
+        if amount >= 150000:
+            sender["suspicion"] = sender.get("suspicion", 0) + 2
+        if member.bot:
+            sender["suspicion"] = sender.get("suspicion", 0) + 3
         history.append(now)
         self.pay_limits[interaction.user.id] = history
         self.save_user_data(interaction.guild.id, interaction.user.id, sender)
@@ -167,6 +197,10 @@ class Economy(commands.Cog):
             return
 
         robber = self.get_user_data(interaction.guild.id, interaction.user.id)
+        blocked = self._abuse_check(interaction.user.id, robber)
+        if blocked:
+            await interaction.response.send_message(blocked, ephemeral=True)
+            return
         victim = self.get_user_data(interaction.guild.id, member.id)
         if victim["balance"] < 200:
             await interaction.response.send_message("❌ У цели слишком мало наличных", ephemeral=True)

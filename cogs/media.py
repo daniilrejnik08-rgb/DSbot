@@ -68,12 +68,13 @@ def extract_audio_sync(query: str) -> tuple[str | None, str]:
 
 
 class GuildMusicState:
-    __slots__ = ("queue", "volume", "text_channel_id")
+    __slots__ = ("queue", "volume", "text_channel_id", "loop_mode")
 
     def __init__(self) -> None:
         self.queue: list[dict[str, Any]] = []
         self.volume: float = 0.35
         self.text_channel_id: int | None = None
+        self.loop_mode: str = "off"
 
 
 class Media(commands.Cog):
@@ -82,6 +83,7 @@ class Media(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._states: dict[int, GuildMusicState] = defaultdict(GuildMusicState)
+        self._now_playing: dict[int, dict[str, Any]] = {}
 
     def _state(self, guild_id: int) -> GuildMusicState:
         return self._states[guild_id]
@@ -105,6 +107,17 @@ class Media(commands.Cog):
             if not vc:
                 return await ch.connect(self_deaf=True)
             return vc
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "davey" in msg or "pynacl" in msg or "voice" in msg:
+                await interaction.followup.send(
+                    "❌ Голосовые библиотеки не установлены на хостинге. "
+                    "Установите зависимости из `requirements.txt` и перезапустите бота.",
+                    ephemeral=True,
+                )
+                return None
+            await interaction.followup.send(f"❌ Ошибка подключения к голосу: {e}", ephemeral=True)
+            return None
         except discord.ClientException as e:
             await interaction.followup.send(f"❌ Не удалось подключиться: {e}", ephemeral=True)
             return None
@@ -132,7 +145,10 @@ class Media(commands.Cog):
                 await vc.disconnect()
             return
 
-        item = st.queue.pop(0)
+        if st.loop_mode == "one" and guild_id in self._now_playing and not vc.is_playing() and not vc.is_paused():
+            item = self._now_playing[guild_id]
+        else:
+            item = st.queue.pop(0)
         url = item["url"]
         title = item["title"]
         try:
@@ -154,6 +170,9 @@ class Media(commands.Cog):
             self._after_play(guild_id, err)
 
         vc.play(vol_source, after=after)
+        self._now_playing[guild_id] = item
+        if st.loop_mode == "all":
+            st.queue.append(item)
         ch_id = st.text_channel_id
         if ch_id:
             ch = guild.get_channel(ch_id)
@@ -189,41 +208,8 @@ class Media(commands.Cog):
         if not vc.is_playing() and not vc.is_paused():
             await self._play_next(gid)
 
-    @app_commands.command(name="play", description="Музыка: поиск YouTube, ссылка или ваш файл")
-    @app_commands.describe(
-        query="Название трека, YouTube/ссылка",
-        attachment="Ваш mp3/ogg/wav — прикрепите к сообщению",
-    )
-    async def play(
-        self,
-        interaction: discord.Interaction,
-        query: str | None = None,
-        attachment: discord.Attachment | None = None,
-    ):
-        if not query and not attachment:
-            await interaction.response.send_message(
-                "❌ Укажите запрос **или** прикрепите аудиофайл.", ephemeral=True
-            )
-            return
-
-        await interaction.response.defer()
-
-        if attachment:
-            if attachment.size > 25 * 1024 * 1024:
-                await interaction.followup.send("❌ Файл больше 25 МБ.", ephemeral=True)
-                return
-            ct = (attachment.content_type or "").lower()
-            ok_ext = attachment.filename.lower().endswith((".mp3", ".ogg", ".wav", ".m4a", ".flac", ".opus"))
-            if not ok_ext and not any(x in ct for x in ("audio", "ogg", "mpeg", "wav", "mp4", "webm")):
-                await interaction.followup.send("❌ Нужен аудиофайл (mp3, ogg, wav…).", ephemeral=True)
-                return
-            title = attachment.filename or "Файл"
-            await self._enqueue(interaction, attachment.url, title)
-            return
-
-        assert query is not None
+    async def _play_from_query(self, interaction: discord.Interaction, query: str) -> None:
         q = query.strip()
-
         if q.startswith("http://") or q.startswith("https://"):
             if re.search(r"\.(mp3|ogg|wav|m4a|flac)(\?|$)", q, re.I):
                 await self._enqueue(interaction, q, "Прямой поток")
@@ -260,6 +246,41 @@ class Media(commands.Cog):
             await interaction.followup.send("❌ Ничего не найдено.", ephemeral=True)
             return
         await self._enqueue(interaction, url, title)
+
+    @app_commands.command(name="play", description="Музыка: поиск YouTube, ссылка или ваш файл")
+    @app_commands.describe(
+        query="Название трека, YouTube/ссылка",
+        attachment="Ваш mp3/ogg/wav — прикрепите к сообщению",
+    )
+    async def play(
+        self,
+        interaction: discord.Interaction,
+        query: str | None = None,
+        attachment: discord.Attachment | None = None,
+    ):
+        if not query and not attachment:
+            await interaction.response.send_message(
+                "❌ Укажите запрос **или** прикрепите аудиофайл.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        if attachment:
+            if attachment.size > 25 * 1024 * 1024:
+                await interaction.followup.send("❌ Файл больше 25 МБ.", ephemeral=True)
+                return
+            ct = (attachment.content_type or "").lower()
+            ok_ext = attachment.filename.lower().endswith((".mp3", ".ogg", ".wav", ".m4a", ".flac", ".opus"))
+            if not ok_ext and not any(x in ct for x in ("audio", "ogg", "mpeg", "wav", "mp4", "webm")):
+                await interaction.followup.send("❌ Нужен аудиофайл (mp3, ogg, wav…).", ephemeral=True)
+                return
+            title = attachment.filename or "Файл"
+            await self._enqueue(interaction, attachment.url, title)
+            return
+
+        assert query is not None
+        await self._play_from_query(interaction, query)
 
     @app_commands.command(name="mix", description="Фоновый микс из интернета (YouTube)")
     @app_commands.choices(
@@ -301,7 +322,8 @@ class Media(commands.Cog):
 
     @app_commands.command(name="music_queue", description="Добавить в очередь (то же, что /play)")
     async def music_queue(self, interaction: discord.Interaction, query: str):
-        await self.play(interaction, query, None)
+        await interaction.response.defer()
+        await self._play_from_query(interaction, query)
 
     @app_commands.command(name="queue", description="Очередь треков")
     async def queue_cmd(self, interaction: discord.Interaction):
@@ -311,11 +333,19 @@ class Media(commands.Cog):
             return
         lines = [f"`{i}.` **{item['title']}**" for i, item in enumerate(st.queue[:15], 1)]
         embed = discord.Embed(title="🎧 Очередь", description="\n".join(lines), color=BRAND)
+        embed.set_footer(text=f"Loop mode: {st.loop_mode}")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="music_list", description="Показать очередь (как /queue)")
     async def music_list(self, interaction: discord.Interaction):
-        await self.queue_cmd(interaction)
+        st = self._state(interaction.guild.id)
+        if not st.queue:
+            await interaction.response.send_message("📭 Очередь пуста.", ephemeral=True)
+            return
+        lines = [f"`{i}.` **{item['title']}**" for i, item in enumerate(st.queue[:15], 1)]
+        embed = discord.Embed(title="🎧 Очередь", description="\n".join(lines), color=BRAND)
+        embed.set_footer(text=f"Loop mode: {st.loop_mode}")
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="skip", description="Пропустить трек")
     async def skip(self, interaction: discord.Interaction):
@@ -333,6 +363,7 @@ class Media(commands.Cog):
     async def stopmusic(self, interaction: discord.Interaction):
         st = self._state(interaction.guild.id)
         st.queue.clear()
+        self._now_playing.pop(interaction.guild.id, None)
         vc = self._voice_client(interaction.guild)
         if vc and vc.is_connected():
             vc.stop()
@@ -362,6 +393,7 @@ class Media(commands.Cog):
         vc = self._voice_client(interaction.guild)
         if vc and vc.is_connected():
             self._state(interaction.guild.id).queue.clear()
+            self._now_playing.pop(interaction.guild.id, None)
             await vc.disconnect()
             await interaction.response.send_message("👋 Вышла из голоса.", ephemeral=True)
         else:
@@ -375,6 +407,39 @@ class Media(commands.Cog):
         if vc and vc.source and isinstance(vc.source, discord.PCMVolumeTransformer):
             vc.source.volume = st.volume
         await interaction.response.send_message(f"🔊 Громкость: **{percent}%**", ephemeral=True)
+
+    @app_commands.command(name="music_mode", description="Режим проигрывания: off/one/all")
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Off", value="off"),
+            app_commands.Choice(name="Loop current track", value="one"),
+            app_commands.Choice(name="Loop full queue", value="all"),
+        ]
+    )
+    async def music_mode(self, interaction: discord.Interaction, mode: str):
+        st = self._state(interaction.guild.id)
+        st.loop_mode = mode
+        await interaction.response.send_message(f"🎛️ Music mode: **{mode}**", ephemeral=True)
+
+    @app_commands.command(name="queue_shuffle", description="Перемешать очередь музыки")
+    async def queue_shuffle(self, interaction: discord.Interaction):
+        st = self._state(interaction.guild.id)
+        if len(st.queue) < 2:
+            await interaction.response.send_message("❌ Недостаточно треков в очереди.", ephemeral=True)
+            return
+        import random
+
+        random.shuffle(st.queue)
+        await interaction.response.send_message("🔀 Очередь перемешана.", ephemeral=True)
+
+    @app_commands.command(name="queue_remove", description="Удалить трек из очереди по номеру")
+    async def queue_remove(self, interaction: discord.Interaction, index: app_commands.Range[int, 1, 50]):
+        st = self._state(interaction.guild.id)
+        if not st.queue or index > len(st.queue):
+            await interaction.response.send_message("❌ Неверный номер.", ephemeral=True)
+            return
+        removed = st.queue.pop(index - 1)
+        await interaction.response.send_message(f"🗑️ Удалено: **{removed['title']}**", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
