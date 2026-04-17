@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 from collections import defaultdict
 from typing import Any
 
@@ -24,6 +25,20 @@ try:
     _HAS_YTDL = True
 except ImportError:
     _HAS_YTDL = False
+
+try:
+    import davey as _davey  # noqa: F401
+
+    _HAS_DAVEY = True
+except Exception:
+    _HAS_DAVEY = False
+
+try:
+    import imageio_ffmpeg
+
+    _HAS_IMAGEIO_FFMPEG = True
+except Exception:
+    _HAS_IMAGEIO_FFMPEG = False
 
 FFMPEG_OPTS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin",
@@ -84,6 +99,18 @@ class Media(commands.Cog):
         self.bot = bot
         self._states: dict[int, GuildMusicState] = defaultdict(GuildMusicState)
         self._now_playing: dict[int, dict[str, Any]] = {}
+        self._ffmpeg_executable = self._detect_ffmpeg()
+
+    def _detect_ffmpeg(self) -> str | None:
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            return system_ffmpeg
+        if _HAS_IMAGEIO_FFMPEG:
+            try:
+                return imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                return None
+        return None
 
     def _state(self, guild_id: int) -> GuildMusicState:
         return self._states[guild_id]
@@ -92,6 +119,13 @@ class Media(commands.Cog):
         return guild.voice_client
 
     async def _connect_voice(self, interaction: discord.Interaction) -> discord.VoiceClient | None:
+        if not _HAS_DAVEY:
+            await interaction.followup.send(
+                "❌ На хостинге не установлена voice-библиотека `davey`. "
+                "Установите зависимости из `requirements.txt` и перезапустите бота.",
+                ephemeral=True,
+            )
+            return None
         if not interaction.user or not getattr(interaction.user, "voice", None):
             await interaction.followup.send("❌ Зайдите в голосовой канал.", ephemeral=True)
             return None
@@ -152,7 +186,10 @@ class Media(commands.Cog):
         url = item["url"]
         title = item["title"]
         try:
-            source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTS)
+            ffmpeg_kwargs = dict(FFMPEG_OPTS)
+            if self._ffmpeg_executable:
+                ffmpeg_kwargs["executable"] = self._ffmpeg_executable
+            source = discord.FFmpegPCMAudio(url, **ffmpeg_kwargs)
             vol_source = discord.PCMVolumeTransformer(source, volume=st.volume)
         except Exception as e:
             log.exception("FFmpeg: %s", e)
@@ -161,7 +198,8 @@ class Media(commands.Cog):
                 ch = guild.get_channel(ch_id)
                 if isinstance(ch, discord.TextChannel):
                     await ch.send(
-                        f"❌ Ошибка FFmpeg: `{e}`\nУстановите **FFmpeg** (https://ffmpeg.org) и добавьте в PATH."
+                        f"❌ Ошибка FFmpeg: `{e}`\n"
+                        "Установите **FFmpeg** в систему или добавьте `imageio-ffmpeg` в зависимости."
                     )
             await self._play_next(guild_id)
             return
@@ -191,22 +229,33 @@ class Media(commands.Cog):
         url: str,
         title: str,
     ) -> None:
-        gid = interaction.guild.id
-        st = self._state(gid)
-        st.text_channel_id = interaction.channel_id
-        st.queue.append({"url": url, "title": title, "requester": interaction.user.id})
-        pos = len(st.queue)
-        vc = await self._connect_voice(interaction)
-        if not vc:
-            st.queue.pop()
-            return
-        embed = discord.Embed(
-            description=f"🎵 **{title}** — в очереди (#{pos})",
-            color=BRAND,
-        )
-        await interaction.followup.send(embed=embed)
-        if not vc.is_playing() and not vc.is_paused():
-            await self._play_next(gid)
+        try:
+            gid = interaction.guild.id
+            st = self._state(gid)
+            st.text_channel_id = interaction.channel_id
+            st.queue.append({"url": url, "title": title, "requester": interaction.user.id})
+            pos = len(st.queue)
+            vc = await self._connect_voice(interaction)
+            if not vc:
+                st.queue.pop()
+                return
+            embed = discord.Embed(
+                description=f"🎵 **{title}** — в очереди (#{pos})",
+                color=BRAND,
+            )
+            await interaction.followup.send(embed=embed)
+            if not vc.is_playing() and not vc.is_paused():
+                await self._play_next(gid)
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "davey" in msg or "voice" in msg or "pynacl" in msg:
+                await interaction.followup.send(
+                    "❌ Голосовой стек не готов на сервере (davey/PyNaCl). "
+                    "Переустановите зависимости и перезапустите контейнер.",
+                    ephemeral=True,
+                )
+                return
+            raise
 
     async def _play_from_query(self, interaction: discord.Interaction, query: str) -> None:
         q = query.strip()
