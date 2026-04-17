@@ -1,0 +1,381 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from collections import defaultdict
+from typing import Any
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+try:
+    from utils.theme import BRAND, SUCCESS
+except Exception:
+    BRAND = discord.Color.blurple()
+    SUCCESS = discord.Color.green()
+
+log = logging.getLogger(__name__)
+
+try:
+    import yt_dlp
+
+    _HAS_YTDL = True
+except ImportError:
+    _HAS_YTDL = False
+
+FFMPEG_OPTS = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin",
+    "options": "-vn",
+}
+
+YDL_COMMON = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "default_search": "ytsearch1",
+    "nocheckcertificate": True,
+}
+
+
+def _flatten_info(info: dict[str, Any]) -> dict[str, Any]:
+    if "entries" in info and info["entries"]:
+        return info["entries"][0]
+    return info
+
+
+def _audio_url_from_info(info: dict[str, Any]) -> str | None:
+    if info.get("url"):
+        return str(info["url"])
+    for fmt in info.get("formats") or []:
+        if fmt.get("acodec") and fmt["acodec"] != "none" and fmt.get("url"):
+            return str(fmt["url"])
+    return None
+
+
+def extract_audio_sync(query: str) -> tuple[str | None, str]:
+    if not _HAS_YTDL:
+        raise RuntimeError("yt-dlp не установлен")
+    opts = dict(YDL_COMMON)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+    info = _flatten_info(info)
+    title = info.get("title") or info.get("id") or "Трек"
+    url = _audio_url_from_info(info)
+    return url, str(title)[:200]
+
+
+class GuildMusicState:
+    __slots__ = ("queue", "volume", "text_channel_id")
+
+    def __init__(self) -> None:
+        self.queue: list[dict[str, Any]] = []
+        self.volume: float = 0.35
+        self.text_channel_id: int | None = None
+
+
+class Media(commands.Cog):
+    """Музыка: YouTube, поиск, прямые ссылки, вложения. Нужны FFmpeg и yt-dlp (pip)."""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._states: dict[int, GuildMusicState] = defaultdict(GuildMusicState)
+
+    def _state(self, guild_id: int) -> GuildMusicState:
+        return self._states[guild_id]
+
+    def _voice_client(self, guild: discord.Guild) -> discord.VoiceClient | None:
+        return guild.voice_client
+
+    async def _connect_voice(self, interaction: discord.Interaction) -> discord.VoiceClient | None:
+        if not interaction.user or not getattr(interaction.user, "voice", None):
+            await interaction.followup.send("❌ Зайдите в голосовой канал.", ephemeral=True)
+            return None
+        ch = interaction.user.voice.channel
+        if not isinstance(ch, discord.VoiceChannel):
+            await interaction.followup.send("❌ Нужен обычный голосовой канал.", ephemeral=True)
+            return None
+        vc = self._voice_client(interaction.guild)
+        try:
+            if vc and vc.channel and vc.channel.id != ch.id:
+                await vc.move_to(ch)
+                return vc
+            if not vc:
+                return await ch.connect(self_deaf=True)
+            return vc
+        except discord.ClientException as e:
+            await interaction.followup.send(f"❌ Не удалось подключиться: {e}", ephemeral=True)
+            return None
+
+    def _after_play(self, guild_id: int, error: BaseException | None) -> None:
+        if error:
+            log.warning("Music playback error: %s", error)
+        fut = asyncio.run_coroutine_threadsafe(self._play_next(guild_id), self.bot.loop)
+        try:
+            fut.result(timeout=60)
+        except Exception as e:
+            log.exception("after play: %s", e)
+
+    async def _play_next(self, guild_id: int) -> None:
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return
+        vc = self._voice_client(guild)
+        if not vc:
+            return
+        st = self._state(guild_id)
+        if not st.queue:
+            await asyncio.sleep(0.5)
+            if not st.queue and vc.is_connected() and not vc.is_playing() and not vc.is_paused():
+                await vc.disconnect()
+            return
+
+        item = st.queue.pop(0)
+        url = item["url"]
+        title = item["title"]
+        try:
+            source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTS)
+            vol_source = discord.PCMVolumeTransformer(source, volume=st.volume)
+        except Exception as e:
+            log.exception("FFmpeg: %s", e)
+            ch_id = st.text_channel_id
+            if ch_id:
+                ch = guild.get_channel(ch_id)
+                if isinstance(ch, discord.TextChannel):
+                    await ch.send(
+                        f"❌ Ошибка FFmpeg: `{e}`\nУстановите **FFmpeg** (https://ffmpeg.org) и добавьте в PATH."
+                    )
+            await self._play_next(guild_id)
+            return
+
+        def after(err: BaseException | None) -> None:
+            self._after_play(guild_id, err)
+
+        vc.play(vol_source, after=after)
+        ch_id = st.text_channel_id
+        if ch_id:
+            ch = guild.get_channel(ch_id)
+            if isinstance(ch, discord.TextChannel):
+                embed = discord.Embed(
+                    title="▶️ Сейчас играет",
+                    description=f"**{title}**",
+                    color=SUCCESS,
+                )
+                embed.set_footer(text="/queue • /skip • /stop")
+                await ch.send(embed=embed)
+
+    async def _enqueue(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        title: str,
+    ) -> None:
+        gid = interaction.guild.id
+        st = self._state(gid)
+        st.text_channel_id = interaction.channel_id
+        st.queue.append({"url": url, "title": title, "requester": interaction.user.id})
+        pos = len(st.queue)
+        vc = await self._connect_voice(interaction)
+        if not vc:
+            st.queue.pop()
+            return
+        embed = discord.Embed(
+            description=f"🎵 **{title}** — в очереди (#{pos})",
+            color=BRAND,
+        )
+        await interaction.followup.send(embed=embed)
+        if not vc.is_playing() and not vc.is_paused():
+            await self._play_next(gid)
+
+    @app_commands.command(name="play", description="Музыка: поиск YouTube, ссылка или ваш файл")
+    @app_commands.describe(
+        query="Название трека, YouTube/ссылка",
+        attachment="Ваш mp3/ogg/wav — прикрепите к сообщению",
+    )
+    async def play(
+        self,
+        interaction: discord.Interaction,
+        query: str | None = None,
+        attachment: discord.Attachment | None = None,
+    ):
+        if not query and not attachment:
+            await interaction.response.send_message(
+                "❌ Укажите запрос **или** прикрепите аудиофайл.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        if attachment:
+            if attachment.size > 25 * 1024 * 1024:
+                await interaction.followup.send("❌ Файл больше 25 МБ.", ephemeral=True)
+                return
+            ct = (attachment.content_type or "").lower()
+            ok_ext = attachment.filename.lower().endswith((".mp3", ".ogg", ".wav", ".m4a", ".flac", ".opus"))
+            if not ok_ext and not any(x in ct for x in ("audio", "ogg", "mpeg", "wav", "mp4", "webm")):
+                await interaction.followup.send("❌ Нужен аудиофайл (mp3, ogg, wav…).", ephemeral=True)
+                return
+            title = attachment.filename or "Файл"
+            await self._enqueue(interaction, attachment.url, title)
+            return
+
+        assert query is not None
+        q = query.strip()
+
+        if q.startswith("http://") or q.startswith("https://"):
+            if re.search(r"\.(mp3|ogg|wav|m4a|flac)(\?|$)", q, re.I):
+                await self._enqueue(interaction, q, "Прямой поток")
+                return
+            if not _HAS_YTDL:
+                await interaction.followup.send(
+                    "❌ Для ссылок установите: `pip install yt-dlp` и **FFmpeg**.", ephemeral=True
+                )
+                return
+            try:
+                loop = asyncio.get_event_loop()
+                url, title = await loop.run_in_executor(None, extract_audio_sync, q)
+            except Exception as e:
+                await interaction.followup.send(f"❌ Не удалось получить аудио: `{e}`", ephemeral=True)
+                return
+            if not url:
+                await interaction.followup.send("❌ Нет аудиопотока.", ephemeral=True)
+                return
+            await self._enqueue(interaction, url, title)
+            return
+
+        if not _HAS_YTDL:
+            await interaction.followup.send(
+                "❌ Для поиска: `pip install yt-dlp` и **FFmpeg** в PATH.", ephemeral=True
+            )
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            url, title = await loop.run_in_executor(None, extract_audio_sync, q)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Поиск: `{e}`", ephemeral=True)
+            return
+        if not url:
+            await interaction.followup.send("❌ Ничего не найдено.", ephemeral=True)
+            return
+        await self._enqueue(interaction, url, title)
+
+    @app_commands.command(name="mix", description="Фоновый микс из интернета (YouTube)")
+    @app_commands.choices(
+        style=[
+            app_commands.Choice(name="🌙 Lo-Fi / Chill", value="lofi"),
+            app_commands.Choice(name="🔊 Phonk", value="phonk"),
+            app_commands.Choice(name="🎸 Rock", value="rock"),
+            app_commands.Choice(name="✨ Pop", value="pop"),
+            app_commands.Choice(name="🎮 Gaming / Epic", value="gaming"),
+            app_commands.Choice(name="🎲 Случайный", value="random"),
+        ]
+    )
+    async def mix(self, interaction: discord.Interaction, style: str):
+        queries = {
+            "lofi": "lofi hip hop radio beats to relax study",
+            "phonk": "phonk drift mix",
+            "rock": "best rock music mix",
+            "pop": "pop hits mix 2024",
+            "gaming": "epic gaming music mix",
+            "random": "chill music mix",
+        }
+        q = queries.get(style, queries["random"])
+        if not _HAS_YTDL:
+            await interaction.response.send_message(
+                "❌ `pip install yt-dlp` и **FFmpeg**.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        try:
+            loop = asyncio.get_event_loop()
+            url, title = await loop.run_in_executor(None, extract_audio_sync, q)
+        except Exception as e:
+            await interaction.followup.send(f"❌ `{e}`", ephemeral=True)
+            return
+        if not url:
+            await interaction.followup.send("❌ Не найдено.", ephemeral=True)
+            return
+        await self._enqueue(interaction, url, f"Микс • {title}")
+
+    @app_commands.command(name="music_queue", description="Добавить в очередь (то же, что /play)")
+    async def music_queue(self, interaction: discord.Interaction, query: str):
+        await self.play(interaction, query, None)
+
+    @app_commands.command(name="queue", description="Очередь треков")
+    async def queue_cmd(self, interaction: discord.Interaction):
+        st = self._state(interaction.guild.id)
+        if not st.queue:
+            await interaction.response.send_message("📭 Очередь пуста.", ephemeral=True)
+            return
+        lines = [f"`{i}.` **{item['title']}**" for i, item in enumerate(st.queue[:15], 1)]
+        embed = discord.Embed(title="🎧 Очередь", description="\n".join(lines), color=BRAND)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="music_list", description="Показать очередь (как /queue)")
+    async def music_list(self, interaction: discord.Interaction):
+        await self.queue_cmd(interaction)
+
+    @app_commands.command(name="skip", description="Пропустить трек")
+    async def skip(self, interaction: discord.Interaction):
+        vc = self._voice_client(interaction.guild)
+        if not vc or not vc.is_connected():
+            await interaction.response.send_message("❌ Бот не в голосе.", ephemeral=True)
+            return
+        if not vc.is_playing() and not vc.is_paused():
+            await interaction.response.send_message("❌ Ничего не играет.", ephemeral=True)
+            return
+        vc.stop()
+        await interaction.response.send_message("⏭️ Пропущено.", ephemeral=True)
+
+    @app_commands.command(name="stopmusic", description="Остановить и очистить очередь")
+    async def stopmusic(self, interaction: discord.Interaction):
+        st = self._state(interaction.guild.id)
+        st.queue.clear()
+        vc = self._voice_client(interaction.guild)
+        if vc and vc.is_connected():
+            vc.stop()
+            await vc.disconnect()
+        await interaction.response.send_message("⏹️ Остановлено.", ephemeral=True)
+
+    @app_commands.command(name="pause", description="Пауза")
+    async def pause(self, interaction: discord.Interaction):
+        vc = self._voice_client(interaction.guild)
+        if vc and vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message("⏸️ Пауза.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Ничего не играет.", ephemeral=True)
+
+    @app_commands.command(name="resume", description="Продолжить")
+    async def resume(self, interaction: discord.Interaction):
+        vc = self._voice_client(interaction.guild)
+        if vc and vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶️ Дальше.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Нет паузы.", ephemeral=True)
+
+    @app_commands.command(name="leave", description="Выйти из голоса")
+    async def leave(self, interaction: discord.Interaction):
+        vc = self._voice_client(interaction.guild)
+        if vc and vc.is_connected():
+            self._state(interaction.guild.id).queue.clear()
+            await vc.disconnect()
+            await interaction.response.send_message("👋 Вышла из голоса.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Бот не в голосе.", ephemeral=True)
+
+    @app_commands.command(name="volume", description="Громкость 0–100 %")
+    async def volume(self, interaction: discord.Interaction, percent: app_commands.Range[int, 0, 100]):
+        st = self._state(interaction.guild.id)
+        st.volume = percent / 100.0
+        vc = self._voice_client(interaction.guild)
+        if vc and vc.source and isinstance(vc.source, discord.PCMVolumeTransformer):
+            vc.source.volume = st.volume
+        await interaction.response.send_message(f"🔊 Громкость: **{percent}%**", ephemeral=True)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Media(bot))
