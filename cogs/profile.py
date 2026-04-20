@@ -451,8 +451,13 @@ class Profile(commands.Cog):
         accent = (72, 196, 255)
         accent_soft = (72, 196, 255, 55)
         bg_dark = (10, 11, 16)
-        glass = (22, 24, 32, 210)
+        has_custom_bg = bg_bytes is not None
+        # Если есть пользовательский фон (в т.ч. GIF), делаем стекло прозрачнее,
+        # чтобы фон действительно был виден внутри карточки.
+        glass = (20, 22, 30, 150 if has_custom_bg else 210)
         glass_edge = (120, 200, 255, 90)
+        panel_fill = (18, 20, 28, 165 if has_custom_bg else 230)
+        stat_fill = (18, 20, 28, 150 if has_custom_bg else 200)
 
         base = Image.new("RGB", (W, H), bg_dark)
         px = base.load()
@@ -476,8 +481,8 @@ class Profile(commands.Cog):
                 # Фон пользователя рендерим внутри карточки профиля (а не по всему холсту).
                 bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
                 bg = bg.resize((cw, ch), Image.Resampling.LANCZOS)
-                bg = bg.filter(ImageFilter.GaussianBlur(radius=5))
-                bg = bg.point(lambda x: int(x * 0.5))
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=2))
+                bg = bg.point(lambda x: int(x * 0.72))
                 card_mask = Image.new("L", (cw, ch), 0)
                 ImageDraw.Draw(card_mask).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=22, fill=255)
                 base.paste(bg, (cx0, cy0), mask=card_mask)
@@ -541,7 +546,7 @@ class Profile(commands.Cog):
         draw.rounded_rectangle(
             (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
             radius=17,
-            fill=(18, 20, 28, 230),
+            fill=panel_fill,
             outline=accent_soft,
             width=1,
         )
@@ -551,7 +556,7 @@ class Profile(commands.Cog):
         draw.text((pill_x + (pill_w - tw) / 2, pill_y + 8), pill_text, fill=(220, 235, 255, 255), font=font_sm)
 
         def stat_box(x: int, y: int, w: int, h: int, title: str, value: str) -> None:
-            draw.rounded_rectangle((x, y, x + w, y + h), radius=14, fill=(18, 20, 28, 200), outline=accent_soft, width=1)
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=14, fill=stat_fill, outline=accent_soft, width=1)
             draw.text((x + 12, y + 10), title, fill=(140, 155, 185, 255), font=font_xs)
             draw.text((x + 12, y + 30), _shorten(value, 22), fill=(235, 242, 255, 255), font=font_md)
 
@@ -596,7 +601,7 @@ class Profile(commands.Cog):
         ld.ellipse((cx - 28, 24, cx + 28, 72), outline=(120, 220, 255, 200), width=3)
         img.alpha_composite(logo_layer, (logo_x, logo_y))
 
-        card_inner = (26, 28, 36, 215)
+        card_inner = (26, 28, 36, 160 if has_custom_bg else 215)
         partner_y = logo_y + logo_s + 14
         ph, ph_h = logo_x - 16, 64
         draw.rounded_rectangle(
