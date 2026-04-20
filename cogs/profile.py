@@ -481,8 +481,9 @@ class Profile(commands.Cog):
                 # Фон пользователя рендерим внутри карточки профиля (а не по всему холсту).
                 bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
                 bg = bg.resize((cw, ch), Image.Resampling.LANCZOS)
-                bg = bg.filter(ImageFilter.GaussianBlur(radius=2))
-                bg = bg.point(lambda x: int(x * 0.72))
+                # Делаем фон заметнее: почти без блюра и с мягким затемнением.
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=1))
+                bg = bg.point(lambda x: int(x * 0.9))
                 card_mask = Image.new("L", (cw, ch), 0)
                 ImageDraw.Draw(card_mask).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=22, fill=255)
                 base.paste(bg, (cx0, cy0), mask=card_mask)
@@ -803,7 +804,8 @@ class Profile(commands.Cog):
         embed.set_footer(text="Кнопки ниже · /daily_login · /economy_hub")
         view = ProfileMenuView(self, member, interaction.user)
         if bg_gif_bytes:
-            await interaction.followup.send(content="Анимированный профиль:", embed=embed, file=file, view=view)
+            # Для GIF надёжнее отправлять файл без embed-картинки — так Discord стабильно анимирует.
+            await interaction.followup.send(content=f"Профиль · {member.display_name}", file=file, view=view)
         else:
             await interaction.followup.send(embed=embed, file=file, view=view)
 
