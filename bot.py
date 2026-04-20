@@ -207,7 +207,7 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='👤 Профиль',
-        value='`/profile` (картинка + кнопки: кастом, достижения, журнал монет), `/daily_login`, `/achievements`, `/profile_stats`',
+        value='`/profile` (картинка + кнопки), `/daily_login`, фоны (`/profile_bg_*`), `/rep`, `/achievement_claim`',
         inline=False
     )
     embed.add_field(

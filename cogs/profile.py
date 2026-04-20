@@ -86,6 +86,35 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+# Дефолтные «неоновые» контуры карточки (как раньше)
+_DEFAULT_OUTLINE_RGB = (72, 196, 255)
+
+
+def _parse_profile_outline_color(raw: str | None) -> tuple[int, int, int] | None:
+    """HEX #RRGGBB или RRGGBB; None если невалидно."""
+    if raw is None or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", s)
+    if not m:
+        return None
+    h = m.group(1)
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _profile_outline_rgb(stored: Any) -> tuple[int, int, int]:
+    if stored is None:
+        return _DEFAULT_OUTLINE_RGB
+    parsed = _parse_profile_outline_color(str(stored))
+    return parsed if parsed is not None else _DEFAULT_OUTLINE_RGB
+
+
+def _outline_rgba(rgb: tuple[int, int, int], alpha: int) -> tuple[int, int, int, int]:
+    r, g, b = rgb
+    a = _clamp(float(alpha), 0.0, 255.0)
+    return (r, g, b, int(a))
+
+
 def _format_voice_duration(seconds: int) -> str:
     if seconds <= 0:
         return "0м."
@@ -178,6 +207,7 @@ class Profile(commands.Cog):
         profile.setdefault("history", [])
         profile.setdefault("voice_seconds", 0)
         profile.setdefault("bg_name", None)
+        profile.setdefault("outline_color", None)
 
     def _sanitize_bg_name(self, name: str) -> str:
         name = re.sub(r"\s+", "_", name.strip())
@@ -476,11 +506,11 @@ class Profile(commands.Cog):
         voice_seconds: int,
         msg_rank: int | None,
         clan_name: str | None,
+        outline_rgb: tuple[int, int, int],
     ) -> bytes:
         del style, last_login_text
         W, H = 1100, 468
-        accent = (72, 196, 255)
-        accent_line = (80, 200, 255, 175)
+        accent_line = _outline_rgba(outline_rgb, 175)
         text_main = (246, 249, 255, 255)
         text_dim = (180, 194, 220, 255)
         text_soft = (145, 160, 188, 255)
@@ -525,7 +555,7 @@ class Profile(commands.Cog):
             draw.text((x, y), s, fill=fill, font=f)
 
         def box(x: int, y: int, w: int, h: int, title: str, value: str) -> None:
-            draw.rounded_rectangle((x, y, x + w, y + h), radius=13, outline=(85, 190, 245, 170), width=1)
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=13, outline=_outline_rgba(outline_rgb, 170), width=1)
             txt(x + 12, y + 8, title, text_soft, font_xs)
             txt(x + 12, y + 31, _shorten(value, 24), text_main, font_md)
 
@@ -542,7 +572,7 @@ class Profile(commands.Cog):
         av_layer = Image.new("RGBA", (av_size, av_size))
         av_layer.paste(av_img, (0, 0), mask=mask)
         img.alpha_composite(av_layer, (left_x, top_y))
-        draw.rounded_rectangle((left_x, top_y, left_x + av_size, top_y + av_size), radius=20, outline=(110, 210, 255, 220), width=2)
+        draw.rounded_rectangle((left_x, top_y, left_x + av_size, top_y + av_size), radius=20, outline=_outline_rgba(outline_rgb, 220), width=2)
 
         name_y = top_y + av_size + 14
         txt(left_x, name_y, _shorten(member_name, 18), text_main, font_xl)
@@ -550,14 +580,14 @@ class Profile(commands.Cog):
         if title_text:
             sub += f" · {_shorten(title_text.strip(), 16)}"
         txt(left_x, name_y + 42, sub, text_dim, font_sm)
-        draw.line((left_x, name_y + 75, left_x + 190, name_y + 75), fill=(95, 205, 255, 235), width=2)
+        draw.line((left_x, name_y + 75, left_x + 190, name_y + 75), fill=_outline_rgba(outline_rgb, 235), width=2)
         txt(left_x, name_y + 95, f"Баланс      {balance:,} 🪙", text_dim, font_md)
         txt(left_x, name_y + 128, f"Значки      {len(badges)} шт.", text_dim, font_md)
         txt(left_x, name_y + 161, f"Сообщений   {messages:,}", text_dim, font_md)
 
         pill_w, pill_h = 200, 34
         pill_x, pill_y = mid_x + 120, top_y + 5
-        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=17, outline=(90, 195, 250, 185), width=1)
+        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=17, outline=_outline_rgba(outline_rgb, 185), width=1)
         pb = draw.textbbox((0, 0), "Статистика", font=font_sm)
         txt(int(pill_x + (pill_w - (pb[2] - pb[0])) / 2), pill_y + 8, "Статистика", text_dim, font_sm)
 
@@ -574,10 +604,10 @@ class Profile(commands.Cog):
         xp_bar_x = mid_x
         xp_bw = gw * 2 + gap
         xp_bh = 12
-        draw.rounded_rectangle((xp_bar_x, xp_bar_y, xp_bar_x + xp_bw, xp_bar_y + xp_bh), radius=8, outline=(100, 205, 255, 180), width=1)
+        draw.rounded_rectangle((xp_bar_x, xp_bar_y, xp_bar_x + xp_bw, xp_bar_y + xp_bh), radius=8, outline=_outline_rgba(outline_rgb, 180), width=1)
         fill_w = int(xp_bw * ratio)
         if fill_w > 2:
-            draw.rounded_rectangle((xp_bar_x + 1, xp_bar_y + 1, xp_bar_x + fill_w, xp_bar_y + xp_bh - 1), radius=7, fill=(72, 196, 255, 230))
+            draw.rounded_rectangle((xp_bar_x + 1, xp_bar_y + 1, xp_bar_x + fill_w, xp_bar_y + xp_bh - 1), radius=7, fill=_outline_rgba(outline_rgb, 230))
         txt(xp_bar_x, xp_bar_y + 18, f"XP {xp}/{need} ({int(ratio * 100)}%) · Серия {streak}д · Репутация {rep}", text_dim, font_xs)
         txt(xp_bar_x, cy0 + ch - 78, f"Всего монет {coins_total:,} · банк {bank:,}", text_soft, font_xs)
 
@@ -598,7 +628,7 @@ class Profile(commands.Cog):
         for i in range(slot_n):
             sx = bx0 + i * (slot_r * 2 + 10)
             sy = badge_y
-            draw.ellipse((sx, sy, sx + slot_r * 2, sy + slot_r * 2), outline=(95, 200, 255, 175), width=1)
+            draw.ellipse((sx, sy, sx + slot_r * 2, sy + slot_r * 2), outline=_outline_rgba(outline_rgb, 175), width=1)
             if i < len(pinned):
                 badge_line = pinned[i].strip()
                 glyph = badge_line[0] if badge_line else "·"
@@ -736,6 +766,7 @@ class Profile(commands.Cog):
             int(p.get("voice_seconds", 0)),
             self._messages_rank(interaction.guild.id, member.id),
             self._clan_name(interaction.guild.id, member.id),
+            _profile_outline_rgb(p.get("outline_color")),
         )
 
         if bg_gif_bytes:
@@ -785,50 +816,6 @@ class Profile(commands.Cog):
         self.save_profile(interaction.guild.id, interaction.user.id, profile)
         await interaction.response.send_message(f"✅ Серия входов: **{profile['daily_streak']}** дней. Получено XP!")
 
-    @app_commands.command(name="profile_stats", description="Профиль 2.0: подробная статистика")
-    async def profile_stats(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        member = member or interaction.user
-        p = self.get_profile(interaction.guild.id, member.id)
-        self._ensure_meta(p)
-        eco = Wallet.get(interaction.guild.id, member.id)
-        total = int(eco.get("balance", 0)) + int(eco.get("bank", 0))
-        need = self.required_xp(int(p.get("level", 1)))
-        xp = int(p.get("xp", 0))
-        ratio = 0 if need <= 0 else int((xp / need) * 100)
-        wins = int(p.get("wins", 0))
-        losses = int(p.get("losses", 0))
-        wr = 0.0 if (wins + losses) == 0 else (wins / (wins + losses)) * 100
-
-        embed = discord.Embed(title=f"Profile 2.0 • {member.display_name}", color=BRAND)
-        embed.add_field(name="Level", value=str(p.get("level", 1)), inline=True)
-        embed.add_field(name="XP progress", value=f"{xp}/{need} ({ratio}%)", inline=True)
-        embed.add_field(name="Rank", value=_rank_title(int(p.get("level", 1))), inline=True)
-        embed.add_field(name="Messages", value=f"{int(p.get('messages', 0)):,}", inline=True)
-        embed.add_field(name="Coins total", value=f"{total:,}", inline=True)
-        embed.add_field(name="Login streak", value=f"{int(p.get('daily_streak', 0))} days", inline=True)
-        embed.add_field(name="Wins/Losses", value=f"{wins}/{losses} (WR {wr:.1f}%)", inline=False)
-        embed.add_field(name="Reputation", value=str(int(p.get("rep", 0))), inline=True)
-        embed.add_field(name="Style", value=str(p.get("style", "dark")), inline=True)
-        embed.add_field(name="Title", value=_shorten(str(p.get("title", "") or "-"), 28), inline=True)
-        embed.add_field(name="Badges", value=", ".join(p.get("badges", [])[:8]) or "No badges yet", inline=False)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="achievements", description="Список достижений и прогресса")
-    async def achievements(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        member = member or interaction.user
-        p = self.get_profile(interaction.guild.id, member.id)
-        self._ensure_meta(p)
-        eco = Wallet.get(interaction.guild.id, member.id)
-        claimed = set(p.get("achievements_claimed", []))
-        lines = []
-        for ach in self._achievement_defs():
-            done = self._is_achievement_done(ach["id"], p, eco)
-            icon = "✅" if ach["id"] in claimed else ("🟨" if done else "⬜")
-            lines.append(f"{icon} **{ach['name']}** — {ach['coins']} coins")
-        embed = discord.Embed(title=f"Achievements • {member.display_name}", description="\n".join(lines), color=BRAND)
-        embed.set_footer(text="✅ claimed • 🟨 ready to claim • ⬜ locked")
-        await interaction.response.send_message(embed=embed)
-
     @app_commands.command(name="achievement_claim", description="Забрать награду за достижение")
     async def achievement_claim(self, interaction: discord.Interaction, achievement_id: str):
         p = self.get_profile(interaction.guild.id, interaction.user.id)
@@ -855,29 +842,6 @@ class Profile(commands.Cog):
         p["achievements_claimed"].append(aid)
         self.save_profile(interaction.guild.id, interaction.user.id, p)
         await interaction.response.send_message(f"🎉 **{defs[aid]['name']}** — получено **{reward}** 🪙")
-
-    @app_commands.command(name="profile_style", description="Стиль карточки профиля")
-    @app_commands.choices(
-        style=[
-            app_commands.Choice(name="Dark", value="dark"),
-            app_commands.Choice(name="Neon", value="neon"),
-            app_commands.Choice(name="Minimal", value="minimal"),
-        ]
-    )
-    async def profile_style(self, interaction: discord.Interaction, style: str):
-        p = self.get_profile(interaction.guild.id, interaction.user.id)
-        self._ensure_meta(p)
-        p["style"] = style
-        self.save_profile(interaction.guild.id, interaction.user.id, p)
-        await interaction.response.send_message(f"✅ Profile style set to **{style}**", ephemeral=True)
-
-    @app_commands.command(name="profile_title", description="Установить короткий титул в профиле")
-    async def profile_title(self, interaction: discord.Interaction, title: app_commands.Range[str, 0, 28]):
-        p = self.get_profile(interaction.guild.id, interaction.user.id)
-        self._ensure_meta(p)
-        p["title"] = title.strip()
-        self.save_profile(interaction.guild.id, interaction.user.id, p)
-        await interaction.response.send_message("✅ Title updated.", ephemeral=True)
 
     @app_commands.command(name="profile_bg_list", description="Список доступных фонов профиля (GIF/PNG/JPG)")
     async def profile_bg_list(self, interaction: discord.Interaction):
@@ -965,54 +929,6 @@ class Profile(commands.Cog):
         self.save_profile(interaction.guild.id, member.id, receiver)
         await interaction.response.send_message(f"👍 {member.mention} получил +1 репутации")
 
-    @app_commands.command(name="profile_history", description="История прогресса профиля (график)")
-    async def profile_history(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        member = member or interaction.user
-        p = self.get_profile(interaction.guild.id, member.id)
-        self._ensure_meta(p)
-        history = list(p.get("history", []))[-14:]
-        if len(history) < 2:
-            await interaction.response.send_message("📉 Недостаточно данных для графика. Нужна история за несколько дней.")
-            return
-        if not _HAS_PIL:
-            await interaction.response.send_message("❌ Для графика нужен Pillow: `pip install Pillow`", ephemeral=True)
-            return
-
-        await interaction.response.defer()
-        W, H = 900, 320
-        img = Image.new("RGB", (W, H), (24, 24, 28))
-        draw = ImageDraw.Draw(img)
-        font = load_cyrillic_font(18)
-        font_small = load_cyrillic_font(14)
-
-        pad = 50
-        draw.rectangle((pad, pad, W - pad, H - pad), outline=(130, 130, 150), width=2)
-        lvls = [int(x.get("lvl", 1)) for x in history]
-        min_v, max_v = min(lvls), max(lvls)
-        if max_v == min_v:
-            max_v = min_v + 1
-        span_x = (W - pad * 2) / (len(history) - 1)
-        points = []
-        for i, v in enumerate(lvls):
-            x = pad + i * span_x
-            y = H - pad - ((v - min_v) / (max_v - min_v)) * (H - pad * 2)
-            points.append((x, y))
-        for i in range(len(points) - 1):
-            draw.line((points[i][0], points[i][1], points[i + 1][0], points[i + 1][1]), fill=(120, 140, 255), width=3)
-        for x, y in points:
-            draw.ellipse((x - 3, y - 3, x + 3, y + 3), fill=(220, 220, 255))
-        draw.text((pad, 18), f"Level history • {member.display_name}", fill=(240, 240, 250), font=font)
-        draw.text((pad, H - 30), f"{history[0].get('d')}  ->  {history[-1].get('d')}", fill=(180, 180, 190), font=font_small)
-        draw.text((W - 190, 18), f"min={min_v} max={max_v}", fill=(180, 180, 190), font=font_small)
-
-        out = io.BytesIO()
-        img.save(out, format="PNG", optimize=True)
-        out.seek(0)
-        file = discord.File(out, filename="profile_history.png")
-        embed = discord.Embed(title=f"Profile history • {member.display_name}", color=BRAND)
-        embed.set_image(url="attachment://profile_history.png")
-        await interaction.followup.send(embed=embed, file=file)
-
 
 class ProfileTitleModal(discord.ui.Modal, title="Титул в карточке"):
     inp = discord.ui.TextInput(
@@ -1033,6 +949,46 @@ class ProfileTitleModal(discord.ui.Modal, title="Титул в карточке"
         self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
         await interaction.response.send_message(
             "✅ Титул сохранён. Вызовите `/profile` ещё раз, чтобы обновить картинку.",
+            ephemeral=True,
+        )
+
+
+class ProfileOutlineModal(discord.ui.Modal, title="Цвет контуров (HEX)"):
+    inp = discord.ui.TextInput(
+        label="#RRGGBB или пусто / default — сброс",
+        max_length=7,
+        required=False,
+        placeholder="#48C4FF",
+        style=discord.TextStyle.short,
+    )
+
+    def __init__(self, cog: Profile):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        raw = str(self.inp.value).strip()
+        if not raw or raw.lower() in ("default", "reset", "сброс", "-", "none"):
+            p["outline_color"] = None
+            self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+            await interaction.response.send_message(
+                "✅ Цвет контуров сброшен. Снова `/profile` для картинки.",
+                ephemeral=True,
+            )
+            return
+        parsed = _parse_profile_outline_color(raw)
+        if not parsed:
+            await interaction.response.send_message(
+                "❌ Нужен HEX из 6 символов (например `#E040FB`).",
+                ephemeral=True,
+            )
+            return
+        p["outline_color"] = f"#{parsed[0]:02x}{parsed[1]:02x}{parsed[2]:02x}"
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(
+            f"✅ Контуры: **{p['outline_color']}**. Снова `/profile`.",
             ephemeral=True,
         )
 
@@ -1069,6 +1025,10 @@ class ProfileCustomizeView(discord.ui.View):
     async def title_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(ProfileTitleModal(self.cog))
 
+    @discord.ui.button(label="Цвет контуров…", style=discord.ButtonStyle.secondary, row=1)
+    async def outline_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(ProfileOutlineModal(self.cog))
+
 
 class ProfileMenuView(discord.ui.View):
     def __init__(self, cog: Profile, target: discord.Member, viewer: discord.Member):
@@ -1089,7 +1049,7 @@ class ProfileMenuView(discord.ui.View):
             await interaction.response.send_message("Кастомизация только **своего** профиля.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "Стиль и титул:",
+            "Стиль, титул и цвет контуров:",
             view=ProfileCustomizeView(self.cog),
             ephemeral=True,
         )
