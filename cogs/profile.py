@@ -550,18 +550,9 @@ class Profile(commands.Cog):
         txt(xp_bar_x, xp_bar_y + 18, f"XP {xp}/{need} ({int(ratio * 100)}%) · Серия {streak}д · Репутация {rep}", text_dim, font_xs)
         txt(xp_bar_x, cy0 + ch - 78, f"Всего монет {coins_total:,} · банк {bank:,}", text_soft, font_xs)
 
-        # Правая колонка
-        logo_s = 116
-        logo_x = right_x + 10
-        logo_y = top_y + 8
-        draw.polygon(
-            [(logo_x + logo_s // 2, logo_y + 18), (logo_x + logo_s - 22, logo_y + logo_s - 28), (logo_x + logo_s // 2 + 8, logo_y + logo_s - 14), (logo_x + 22, logo_y + logo_s - 28)],
-            fill=(50, 160, 245, 180),
-        )
-        draw.ellipse((logo_x + logo_s // 2 - 28, logo_y + 24, logo_x + logo_s // 2 + 28, logo_y + 72), outline=(120, 220, 255, 210), width=3)
-
-        card_x = logo_x - 16
-        partner_y = logo_y + logo_s + 14
+        # Правая колонка (блоки «Пара» / «Клан»; декоративный логотип убран)
+        card_x = right_x - 6
+        partner_y = top_y + 8
         box(card_x, partner_y, 260, 64, "Пара", "Пары нет")
         clan_y = partner_y + 76
         box(card_x, clan_y, 260, 64, "Клан", clan_name if clan_name else "Клана нет")
