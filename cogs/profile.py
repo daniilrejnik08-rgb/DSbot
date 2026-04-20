@@ -228,8 +228,11 @@ class Profile(commands.Cog):
             card_rgb = card_rgb.resize((900, 383), Image.Resampling.LANCZOS)
             card = card_rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
             frames.append(card)
-            dur = int(getattr(im, "info", {}).get("duration", 70))
-            durations.append(max(60, min(180, dur)))
+            # Исходный GIF: duration в мс за один кадр. При step>1 пропускаем кадры — время на экране
+            # должно суммироваться, иначе анимация ускоряется во столько раз.
+            base_ms = int(getattr(im, "info", {}).get("duration", 100) or 100)
+            combined_ms = base_ms * step
+            durations.append(max(120, min(650, combined_ms)))
             idx += 1
             if idx >= max_frames:
                 break
