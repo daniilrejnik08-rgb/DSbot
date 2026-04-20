@@ -66,4 +66,10 @@ class TreeCraft(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(TreeCraft(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(TreeCraft(bot))
+    else:
+        await bot.add_cog(TreeCraft(bot), guild=g)

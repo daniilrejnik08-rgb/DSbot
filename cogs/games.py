@@ -826,4 +826,10 @@ class Games(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Games(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(Games(bot))
+    else:
+        await bot.add_cog(Games(bot), guild=g)

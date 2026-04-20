@@ -417,4 +417,10 @@ class CSMonitor(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(CSMonitor(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(CSMonitor(bot))
+    else:
+        await bot.add_cog(CSMonitor(bot), guild=g)

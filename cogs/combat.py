@@ -69,4 +69,10 @@ class Combat(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Combat(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(Combat(bot))
+    else:
+        await bot.add_cog(Combat(bot), guild=g)

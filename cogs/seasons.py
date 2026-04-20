@@ -114,4 +114,10 @@ class Seasons(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Seasons(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(Seasons(bot))
+    else:
+        await bot.add_cog(Seasons(bot), guild=g)

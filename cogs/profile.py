@@ -1157,4 +1157,10 @@ class ProfileMenuView(discord.ui.View):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Profile(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(Profile(bot))
+    else:
+        await bot.add_cog(Profile(bot), guild=g)

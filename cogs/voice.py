@@ -485,4 +485,10 @@ class Voice(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Voice(bot))
+    from utils import target_guild
+
+    g = target_guild()
+    if g is None:
+        await bot.add_cog(Voice(bot))
+    else:
+        await bot.add_cog(Voice(bot), guild=g)
