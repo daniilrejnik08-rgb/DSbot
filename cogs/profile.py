@@ -446,43 +446,32 @@ class Profile(commands.Cog):
         msg_rank: int | None,
         clan_name: str | None,
     ) -> bytes:
-        del style  # единый glass-стиль
+        del style, last_login_text
         W, H = 1100, 468
         accent = (72, 196, 255)
-        accent_soft = (72, 196, 255, 55)
-        bg_dark = (10, 11, 16)
-        # Принудительно прозрачный режим карточки.
-        has_custom_bg = bg_bytes is not None
-        glass = (18, 20, 28, 0)
-        glass_edge = (120, 200, 255, 90)
-        panel_fill = (18, 20, 28, 0)
-        stat_fill = (18, 20, 28, 0)
+        accent_line = (80, 200, 255, 175)
+        text_main = (246, 249, 255, 255)
+        text_dim = (180, 194, 220, 255)
+        text_soft = (145, 160, 188, 255)
 
-        base = Image.new("RGB", (W, H), bg_dark)
+        base = Image.new("RGB", (W, H), (8, 10, 16))
         px = base.load()
         for y in range(H):
             t = y / max(H - 1, 1)
-            r = int(10 + t * 8)
-            g = int(11 + t * 10)
-            b = int(18 + t * 14)
             for x in range(W):
+                u = x / max(W - 1, 1)
+                r = int(9 + 8 * t + 7 * u)
+                g = int(11 + 8 * t + 10 * u)
+                b = int(18 + 12 * t + 14 * u)
                 px[x, y] = (r, g, b)
-
-        font_xl = self._load_font(26)
-        font_md = self._load_font(17)
-        font_sm = self._load_font(15)
-        font_xs = self._load_font(13)
 
         cx0, cy0 = 24, 24
         cw, ch = W - 48, H - 48
         if bg_bytes:
             try:
-                # Фон пользователя рендерим внутри карточки профиля (а не по всему холсту).
                 bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
                 bg = bg.resize((cw, ch), Image.Resampling.LANCZOS)
-                # Делаем фон заметнее: почти без блюра и с мягким затемнением.
-                bg = bg.filter(ImageFilter.GaussianBlur(radius=1))
-                bg = bg.point(lambda x: int(x * 0.9))
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=0.6))
                 card_mask = Image.new("L", (cw, ch), 0)
                 ImageDraw.Draw(card_mask).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=22, fill=255)
                 base.paste(bg, (cx0, cy0), mask=card_mask)
@@ -491,145 +480,93 @@ class Profile(commands.Cog):
 
         img = base.convert("RGBA")
         draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle((cx0, cy0, cx0 + cw, cy0 + ch), radius=22, outline=accent_line, width=2)
 
-        draw.rounded_rectangle((cx0, cy0, cx0 + cw, cy0 + ch), radius=22, fill=glass, outline=glass_edge, width=2)
+        font_xl = self._load_font(38)
+        font_lg = self._load_font(21)
+        font_md = self._load_font(17)
+        font_sm = self._load_font(15)
+        font_xs = self._load_font(13)
 
-        pad = 36
-        col_left = cx0 + pad
-        col_mid = col_left + 228
-        col_right = col_mid + 448
+        def txt(x: int, y: int, s: str, fill: tuple[int, int, int, int], f: Any) -> None:
+            # лёгкая подложка под текст для читаемости на GIF
+            draw.text((x + 1, y + 1), s, fill=(0, 0, 0, 180), font=f)
+            draw.text((x, y), s, fill=fill, font=f)
+
+        def box(x: int, y: int, w: int, h: int, title: str, value: str) -> None:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=13, outline=(85, 190, 245, 170), width=1)
+            txt(x + 12, y + 8, title, text_soft, font_xs)
+            txt(x + 12, y + 31, _shorten(value, 24), text_main, font_md)
+
+        pad = 34
+        left_x = cx0 + pad
+        mid_x = left_x + 228
+        right_x = mid_x + 446
+        top_y = cy0 + pad
 
         av_size = 132
-        av_x, av_y = col_left, cy0 + pad
-        av_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-        av_img = av_img.resize((av_size, av_size), Image.Resampling.LANCZOS)
-        rad = 20
+        av_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((av_size, av_size), Image.Resampling.LANCZOS)
         mask = Image.new("L", (av_size, av_size), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, av_size - 1, av_size - 1), radius=rad, fill=255)
-        avatar_layer = Image.new("RGBA", (av_size, av_size))
-        avatar_layer.paste(av_img, (0, 0), mask=mask)
-        glow = Image.new("RGBA", (av_size + 10, av_size + 10), (0, 0, 0, 0))
-        ImageDraw.Draw(glow).rounded_rectangle(
-            (2, 2, av_size + 7, av_size + 7),
-            radius=rad + 2,
-            outline=(*accent, 140),
-            width=3,
-        )
-        img.alpha_composite(glow, (av_x - 5, av_y - 5))
-        img.alpha_composite(avatar_layer, (av_x, av_y))
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, av_size - 1, av_size - 1), radius=20, fill=255)
+        av_layer = Image.new("RGBA", (av_size, av_size))
+        av_layer.paste(av_img, (0, 0), mask=mask)
+        img.alpha_composite(av_layer, (left_x, top_y))
+        draw.rounded_rectangle((left_x, top_y, left_x + av_size, top_y + av_size), radius=20, outline=(110, 210, 255, 220), width=2)
 
-        name_y = av_y + av_size + 14
-        draw.text((col_left, name_y), _shorten(member_name, 18), fill=(250, 252, 255, 255), font=font_xl)
+        name_y = top_y + av_size + 14
+        txt(left_x, name_y, _shorten(member_name, 18), text_main, font_xl)
         sub = f"Lvl {level} · {_rank_title(level)}"
         if title_text:
             sub += f" · {_shorten(title_text.strip(), 16)}"
-        draw.text((col_left, name_y + 34), sub, fill=(180, 190, 210, 255), font=font_sm)
-        line_y = name_y + 62
-        draw.line((col_left, line_y, col_left + 190, line_y), fill=(*accent, 200), width=2)
-
-        candy_y = line_y + 18
-        draw.text((col_left, candy_y), "Баланс", fill=(160, 175, 200, 255), font=font_xs)
-        draw.text((col_left + 72, candy_y), f"{balance:,} 🪙", fill=(240, 245, 255, 255), font=font_md)
-        medal_y = candy_y + 36
-        draw.text((col_left, medal_y), "Значки", fill=(160, 175, 200, 255), font=font_xs)
-        draw.text(
-            (col_left + 72, medal_y),
-            f"{len(badges)} шт.",
-            fill=(240, 245, 255, 255),
-            font=font_md,
-        )
-        draw.text((col_left, medal_y + 34), f"Сообщений: {messages:,}", fill=(160, 175, 200, 255), font=font_xs)
+        txt(left_x, name_y + 42, sub, text_dim, font_sm)
+        draw.line((left_x, name_y + 75, left_x + 190, name_y + 75), fill=(95, 205, 255, 235), width=2)
+        txt(left_x, name_y + 95, f"Баланс      {balance:,} 🪙", text_dim, font_md)
+        txt(left_x, name_y + 128, f"Значки      {len(badges)} шт.", text_dim, font_md)
+        txt(left_x, name_y + 161, f"Сообщений   {messages:,}", text_dim, font_md)
 
         pill_w, pill_h = 200, 34
-        pill_x = col_mid + 120
-        pill_y = cy0 + pad + 6
-        draw.rounded_rectangle(
-            (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
-            radius=17,
-            fill=panel_fill,
-            outline=accent_soft,
-            width=1,
-        )
-        pill_text = "Статистика"
-        bbox = draw.textbbox((0, 0), pill_text, font=font_sm)
-        tw = bbox[2] - bbox[0]
-        draw.text((pill_x + (pill_w - tw) / 2, pill_y + 8), pill_text, fill=(220, 235, 255, 255), font=font_sm)
+        pill_x, pill_y = mid_x + 120, top_y + 5
+        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=17, outline=(90, 195, 250, 185), width=1)
+        pb = draw.textbbox((0, 0), "Статистика", font=font_sm)
+        txt(int(pill_x + (pill_w - (pb[2] - pb[0])) / 2), pill_y + 8, "Статистика", text_dim, font_sm)
 
-        def stat_box(x: int, y: int, w: int, h: int, title: str, value: str) -> None:
-            draw.rounded_rectangle((x, y, x + w, y + h), radius=14, fill=stat_fill, outline=accent_soft, width=1)
-            draw.text((x + 12, y + 10), title, fill=(140, 155, 185, 255), font=font_xs)
-            draw.text((x + 12, y + 30), _shorten(value, 22), fill=(235, 242, 255, 255), font=font_md)
-
+        gw, gh, gap = 196, 72, 14
         grid_top = pill_y + 48
-        gw, gh = 196, 72
-        gap = 14
-        stat_box(col_mid, grid_top, gw, gh, "Находится в", voice_label)
-        stat_box(col_mid + gw + gap, grid_top, gw, gh, "Голосовой онлайн", _format_voice_duration(voice_seconds))
         rank_txt = f"{msg_rank} место" if msg_rank is not None else "—"
-        stat_box(col_mid, grid_top + gh + gap, gw, gh, "Топ по сообщениям", rank_txt)
-        stat_box(col_mid + gw + gap, grid_top + gh + gap, gw, gh, "Любимая комната", "Нет")
+        box(mid_x, grid_top, gw, gh, "Находится в", voice_label)
+        box(mid_x + gw + gap, grid_top, gw, gh, "Голосовой онлайн", _format_voice_duration(voice_seconds))
+        box(mid_x, grid_top + gh + gap, gw, gh, "Топ по сообщениям", rank_txt)
+        box(mid_x + gw + gap, grid_top + gh + gap, gw, gh, "Любимая комната", "Нет")
 
         ratio = 0.0 if need <= 0 else _clamp(xp / need, 0.0, 1.0)
         xp_bar_y = grid_top + (gh + gap) * 2 + 18
-        xp_bar_x = col_mid
+        xp_bar_x = mid_x
         xp_bw = gw * 2 + gap
         xp_bh = 12
-        draw.rounded_rectangle((xp_bar_x, xp_bar_y, xp_bar_x + xp_bw, xp_bar_y + xp_bh), radius=8, fill=(40, 44, 58, 255))
+        draw.rounded_rectangle((xp_bar_x, xp_bar_y, xp_bar_x + xp_bw, xp_bar_y + xp_bh), radius=8, outline=(100, 205, 255, 180), width=1)
         fill_w = int(xp_bw * ratio)
-        if fill_w > 0:
-            draw.rounded_rectangle(
-                (xp_bar_x, xp_bar_y, xp_bar_x + fill_w, xp_bar_y + xp_bh),
-                radius=8,
-                fill=(*accent, 240),
-            )
-        xp_txt = f"XP {xp}/{need} ({int(ratio * 100)}%) · Серия {streak}д · Репутация {rep}"
-        draw.text((xp_bar_x, xp_bar_y + 18), xp_txt, fill=(170, 185, 210, 255), font=font_xs)
+        if fill_w > 2:
+            draw.rounded_rectangle((xp_bar_x + 1, xp_bar_y + 1, xp_bar_x + fill_w, xp_bar_y + xp_bh - 1), radius=7, fill=(72, 196, 255, 230))
+        txt(xp_bar_x, xp_bar_y + 18, f"XP {xp}/{need} ({int(ratio * 100)}%) · Серия {streak}д · Репутация {rep}", text_dim, font_xs)
+        txt(xp_bar_x, cy0 + ch - 78, f"Всего монет {coins_total:,} · банк {bank:,}", text_soft, font_xs)
 
-        logo_x = col_right + 10
-        logo_y = cy0 + pad + 8
+        # Правая колонка
         logo_s = 116
-        logo_layer = Image.new("RGBA", (logo_s, logo_s), (0, 0, 0, 0))
-        ld = ImageDraw.Draw(logo_layer)
-        cx = logo_s // 2
-        pts = [
-            (cx, 18),
-            (logo_s - 22, logo_s - 28),
-            (cx + 8, logo_s - 14),
-            (22, logo_s - 28),
-        ]
-        ld.polygon(pts, fill=(50, 160, 245, 230))
-        ld.ellipse((cx - 28, 24, cx + 28, 72), outline=(120, 220, 255, 200), width=3)
-        img.alpha_composite(logo_layer, (logo_x, logo_y))
+        logo_x = right_x + 10
+        logo_y = top_y + 8
+        draw.polygon(
+            [(logo_x + logo_s // 2, logo_y + 18), (logo_x + logo_s - 22, logo_y + logo_s - 28), (logo_x + logo_s // 2 + 8, logo_y + logo_s - 14), (logo_x + 22, logo_y + logo_s - 28)],
+            fill=(50, 160, 245, 180),
+        )
+        draw.ellipse((logo_x + logo_s // 2 - 28, logo_y + 24, logo_x + logo_s // 2 + 28, logo_y + 72), outline=(120, 220, 255, 210), width=3)
 
-        card_inner = (26, 28, 36, 0)
+        card_x = logo_x - 16
         partner_y = logo_y + logo_s + 14
-        ph, ph_h = logo_x - 16, 64
-        draw.rounded_rectangle(
-            (ph, partner_y, ph + 260, partner_y + ph_h),
-            radius=14,
-            fill=card_inner,
-            outline=accent_soft,
-            width=1,
-        )
-        draw.ellipse((ph + 14, partner_y + 14, ph + 48, partner_y + 48), outline=(90, 100, 120, 255), width=2)
-        draw.text((ph + 62, partner_y + 14), "Пары нет", fill=(230, 236, 250, 255), font=font_md)
-        draw.text((ph + 62, partner_y + 38), "Пусто", fill=(130, 145, 170, 255), font=font_sm)
+        box(card_x, partner_y, 260, 64, "Пара", "Пары нет")
+        clan_y = partner_y + 76
+        box(card_x, clan_y, 260, 64, "Клан", clan_name if clan_name else "Клана нет")
 
-        clan_y = partner_y + ph_h + 12
-        draw.rounded_rectangle(
-            (ph, clan_y, ph + 260, clan_y + ph_h),
-            radius=14,
-            fill=card_inner,
-            outline=accent_soft,
-            width=1,
-        )
-        draw.text((ph + 14, clan_y + 10), "Клан", fill=(160, 175, 200, 255), font=font_xs)
-        if clan_name:
-            draw.text((ph + 14, clan_y + 28), _shorten(clan_name, 24), fill=(230, 236, 250, 255), font=font_md)
-        else:
-            draw.text((ph + 14, clan_y + 28), "Клана нет", fill=(230, 236, 250, 255), font=font_md)
-            draw.text((ph + 14, clan_y + 46), "Пусто", fill=(130, 145, 170, 255), font=font_sm)
-
+        # Нижняя линия значков
         badge_y = cy0 + ch - 52
         slot_n = 7
         slot_r = 15
@@ -639,18 +576,11 @@ class Profile(commands.Cog):
         for i in range(slot_n):
             sx = bx0 + i * (slot_r * 2 + 10)
             sy = badge_y
-            draw.ellipse((sx, sy, sx + slot_r * 2, sy + slot_r * 2), fill=(30, 32, 42, 255), outline=accent_soft, width=1)
+            draw.ellipse((sx, sy, sx + slot_r * 2, sy + slot_r * 2), outline=(95, 200, 255, 175), width=1)
             if i < len(pinned):
                 badge_line = pinned[i].strip()
                 glyph = badge_line[0] if badge_line else "·"
-                draw.text((sx + slot_r - 5, sy + slot_r - 10), glyph, fill=(210, 230, 255, 255), font=font_md)
-
-        draw.text(
-            (col_mid, cy0 + ch - 78),
-            f"Всего монет {coins_total:,} · банк {bank:,}",
-            fill=(140, 155, 180, 255),
-            font=font_xs,
-        )
+                txt(sx + slot_r - 5, sy + slot_r - 10, glyph, (210, 230, 255, 255), font_md)
 
         out = io.BytesIO()
         img.convert("RGB").save(out, format="PNG", optimize=True)
