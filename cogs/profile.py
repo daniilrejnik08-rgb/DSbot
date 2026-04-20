@@ -204,7 +204,7 @@ class Profile(commands.Cog):
         frames: list[Image.Image] = []
         durations: list[int] = []
         # ограничим кадры, чтобы не было тяжело
-        max_frames = 14
+        max_frames = 8
         step = max(1, int(getattr(im, "n_frames", 1) // max_frames))
         idx = 0
         try:
@@ -223,10 +223,13 @@ class Profile(commands.Cog):
             if len(call_args) >= 3:
                 call_args[2] = b.getvalue()
             png_bytes = self._render_card_sync(*call_args)  # type: ignore[arg-type]
-            card = Image.open(io.BytesIO(png_bytes)).convert("P", palette=Image.Palette.ADAPTIVE)
+            card_rgb = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+            # Сжимаем GIF, чтобы надёжнее проходить лимит вложений Discord.
+            card_rgb = card_rgb.resize((900, 383), Image.Resampling.LANCZOS)
+            card = card_rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
             frames.append(card)
             dur = int(getattr(im, "info", {}).get("duration", 70))
-            durations.append(max(40, min(140, dur)))
+            durations.append(max(60, min(180, dur)))
             idx += 1
             if idx >= max_frames:
                 break
@@ -461,21 +464,6 @@ class Profile(commands.Cog):
             for x in range(W):
                 px[x, y] = (r, g, b)
 
-        if bg_bytes:
-            try:
-                bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
-                bg = bg.resize((W, H), Image.Resampling.LANCZOS)
-                bg = bg.filter(ImageFilter.GaussianBlur(radius=8))
-                bg = bg.point(lambda x: int(x * 0.35))
-                base.paste(bg, (0, 0))
-            except Exception:
-                pass
-
-        img = base.convert("RGBA")
-        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 115))
-        img.alpha_composite(overlay)
-        draw = ImageDraw.Draw(img)
-
         font_xl = self._load_font(26)
         font_md = self._load_font(17)
         font_sm = self._load_font(15)
@@ -483,6 +471,22 @@ class Profile(commands.Cog):
 
         cx0, cy0 = 24, 24
         cw, ch = W - 48, H - 48
+        if bg_bytes:
+            try:
+                # Фон пользователя рендерим внутри карточки профиля (а не по всему холсту).
+                bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
+                bg = bg.resize((cw, ch), Image.Resampling.LANCZOS)
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=5))
+                bg = bg.point(lambda x: int(x * 0.5))
+                card_mask = Image.new("L", (cw, ch), 0)
+                ImageDraw.Draw(card_mask).rounded_rectangle((0, 0, cw - 1, ch - 1), radius=22, fill=255)
+                base.paste(bg, (cx0, cy0), mask=card_mask)
+            except Exception:
+                pass
+
+        img = base.convert("RGBA")
+        draw = ImageDraw.Draw(img)
+
         draw.rounded_rectangle((cx0, cy0, cx0 + cw, cy0 + ch), radius=22, fill=glass, outline=glass_edge, width=2)
 
         pad = 36
@@ -780,7 +784,7 @@ class Profile(commands.Cog):
         if bg_gif_bytes:
             gif = await asyncio.to_thread(self._render_profile_gif_sync, *args, gif_bg_bytes=bg_gif_bytes)
             file = discord.File(io.BytesIO(gif), filename="profile.gif")
-            image_url = "attachment://profile.gif"
+            image_url = None
         else:
             png = await asyncio.to_thread(self._render_card_sync, *args)
             file = discord.File(io.BytesIO(png), filename="profile.png")
@@ -789,10 +793,14 @@ class Profile(commands.Cog):
             title=f"Профиль · {member.display_name}",
             color=BRAND,
         )
-        embed.set_image(url=image_url)
+        if image_url:
+            embed.set_image(url=image_url)
         embed.set_footer(text="Кнопки ниже · /daily_login · /economy_hub")
         view = ProfileMenuView(self, member, interaction.user)
-        await interaction.followup.send(embed=embed, file=file, view=view)
+        if bg_gif_bytes:
+            await interaction.followup.send(content="Анимированный профиль:", embed=embed, file=file, view=view)
+        else:
+            await interaction.followup.send(embed=embed, file=file, view=view)
 
     @app_commands.command(name="daily_login", description="Ежедневная серия входа")
     async def daily_login(self, interaction: discord.Interaction):
