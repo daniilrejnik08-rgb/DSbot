@@ -4,6 +4,7 @@ import os
 
 import discord
 from discord.ext import commands
+from discord.app_commands.errors import CommandLimitReached
 
 log = logging.getLogger(__name__)
 
@@ -103,11 +104,29 @@ class ProBot(commands.Bot):
         if not os.path.isdir(cogs_dir):
             log.warning("Папка cogs не найдена")
             return
-        for filename in os.listdir(cogs_dir):
+        files = [f for f in os.listdir(cogs_dir) if f.endswith(".py") and not f.startswith("__")]
+        # Сначала важные коги, чтобы при лимите slash-команд первыми были профиль/экономика/игры.
+        priority = [
+            "profile.py",
+            "economy.py",
+            "games.py",
+            "media.py",
+        ]
+        files.sort(key=lambda x: (priority.index(x) if x in priority else 999, x))
+
+        for filename in files:
             if filename.endswith(".py") and not filename.startswith("__"):
                 try:
                     await self.load_extension(f"cogs.{filename[:-3]}")
                     log.info("Загружен ког: %s", filename[:-3])
+                except CommandLimitReached as e:
+                    log.error(
+                        "Достигнут лимит slash-команд (%s) при загрузке %s. "
+                        "Останавливаю загрузку оставшихся когов.",
+                        e.limit,
+                        filename,
+                    )
+                    break
                 except Exception as e:
                     log.exception("Ошибка загрузки %s: %s", filename, e)
 

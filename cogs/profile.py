@@ -196,7 +196,10 @@ class Profile(commands.Cog):
             im = Image.open(io.BytesIO(gif_bg_bytes))
         except Exception:
             # fallback: один кадр как PNG
-            return self._render_card_sync(*args, bg_bytes=None)  # type: ignore[arg-type]
+            call_args = list(args)
+            if len(call_args) >= 3:
+                call_args[2] = None
+            return self._render_card_sync(*call_args)  # type: ignore[arg-type]
 
         frames: list[Image.Image] = []
         durations: list[int] = []
@@ -216,7 +219,10 @@ class Profile(commands.Cog):
                 continue
             b = io.BytesIO()
             fr.save(b, format="PNG")
-            png_bytes = self._render_card_sync(*args, bg_bytes=b.getvalue())  # type: ignore[arg-type]
+            call_args = list(args)
+            if len(call_args) >= 3:
+                call_args[2] = b.getvalue()
+            png_bytes = self._render_card_sync(*call_args)  # type: ignore[arg-type]
             card = Image.open(io.BytesIO(png_bytes)).convert("P", palette=Image.Palette.ADAPTIVE)
             frames.append(card)
             dur = int(getattr(im, "info", {}).get("duration", 70))
@@ -226,7 +232,10 @@ class Profile(commands.Cog):
                 break
 
         if not frames:
-            return self._render_card_sync(*args, bg_bytes=None)  # type: ignore[arg-type]
+            call_args = list(args)
+            if len(call_args) >= 3:
+                call_args[2] = None
+            return self._render_card_sync(*call_args)  # type: ignore[arg-type]
 
         out = io.BytesIO()
         frames[0].save(
