@@ -63,8 +63,8 @@ ANIME_BG_APIS: list[str] = [
 ]
 
 # Анимированный профиль: ~60 FPS (мин. шаг кадра в мс), макс. кадров — баланс CPU / размер / Discord
-PROFILE_GIF_TARGET_FPS = 60
-PROFILE_GIF_MAX_FRAMES = 48
+PROFILE_GIF_TARGET_FPS = 75
+PROFILE_GIF_MAX_FRAMES = 60
 
 
 def _gif_even_frame_indices(n: int, m: int) -> list[int]:
