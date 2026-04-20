@@ -21,7 +21,7 @@ def _voice_banner_file() -> tuple[discord.File, str] | None:
     """Картинка для embed: сначала ищется настоящая GIF (анимация), иначе статика.
 
     Положите **оригинальную** гифку с диска как `assets/voice_panel_banner.gif`
-    (через чат Cursor часто сохраняется один кадр JPEG — анимацию так не восстановить).
+    ( так не восстановить).
     """
     for name in (
         "voice_panel_banner.gif",

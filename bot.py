@@ -6,6 +6,33 @@ from discord.ext import commands
 
 log = logging.getLogger(__name__)
 
+
+def ensure_opus_loaded() -> bool:
+    """Явно подключает libopus (в slim-образах авто-поиск часто не находит библиотеку)."""
+    try:
+        if discord.opus.is_loaded():
+            return True
+    except AttributeError:
+        pass
+    for path in (
+        "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+        "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+        "/usr/lib/libopus.so.0",
+        "libopus.so.0",
+    ):
+        try:
+            discord.opus.load_opus(path)
+            log.info("Opus загружен (%s)", path)
+            return True
+        except Exception:
+            continue
+    log.warning(
+        "Opus не загружен: музыка в голосе не заработает. "
+        "В Docker установите libopus0 и пересоберите образ."
+    )
+    return False
+
+
 try:
     from utils.theme import BRAND
 except Exception:
@@ -94,7 +121,7 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='🛡️ Модерация',
-        value='`/warn`, `/warnings`, `/clearwarn`, `/kick`, `/ban`, `/mute`, `/unmute`, `/purge`',
+        value='`/warn`, `/warnings`, `/clearwarn`, `/kick`, `/ban`, `/mute`, `/unmute`, `/purge`, `/botsay`, `!say`',
         inline=False
     )
     embed.add_field(
@@ -144,6 +171,7 @@ async def help_command(interaction: discord.Interaction):
 
 
 def run_bot() -> None:
+    ensure_opus_loaded()
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise RuntimeError("Переменная окружения DISCORD_TOKEN не задана.")

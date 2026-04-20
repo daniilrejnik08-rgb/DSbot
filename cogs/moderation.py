@@ -103,6 +103,34 @@ class Moderation(commands.Cog):
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"✅ Удалено {len(deleted)} сообщений", ephemeral=True)
 
+    @app_commands.command(name="botsay", description="Отправить сообщение от имени бота")
+    @app_commands.describe(
+        text="Текст сообщения бота",
+        channel="Куда отправить (пусто — этот канал)",
+    )
+    @app_commands.default_permissions(manage_messages=True)
+    async def botsay(
+        self,
+        interaction: discord.Interaction,
+        text: str,
+        channel: discord.TextChannel | None = None,
+    ):
+        t = text.strip()
+        if not t or len(t) > 2000:
+            await interaction.response.send_message("❌ Текст: 1…2000 символов.", ephemeral=True)
+            return
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message("❌ Нужен текстовый канал.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await target.send(t)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ У бота нет прав писать в этот канал.", ephemeral=True)
+            return
+        await interaction.followup.send(f"✅ Отправлено в {target.mention}", ephemeral=True)
+
     @commands.command(name="say")
     @commands.has_permissions(manage_messages=True)
     async def say_prefix(self, ctx: commands.Context, *, text: str):
