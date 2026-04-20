@@ -62,6 +62,25 @@ ANIME_BG_APIS: list[str] = [
     "https://api.waifu.pics/sfw/neko",
 ]
 
+# Анимированный профиль: ~60 FPS (мин. шаг кадра в мс), макс. кадров — баланс CPU / размер / Discord
+PROFILE_GIF_TARGET_FPS = 60
+PROFILE_GIF_MAX_FRAMES = 48
+
+
+def _gif_even_frame_indices(n: int, m: int) -> list[int]:
+    """Равномерные индексы по всему циклу GIF (не только начало), без дубликатов подряд."""
+    if n <= 0:
+        return [0]
+    m = max(1, min(m, n))
+    if m <= 1:
+        return [0]
+    raw = [min(n - 1, int(round(k * (n - 1) / (m - 1)))) for k in range(m)]
+    out: list[int] = []
+    for x in raw:
+        if not out or out[-1] != x:
+            out.append(x)
+    return out
+
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
@@ -203,15 +222,25 @@ class Profile(commands.Cog):
 
         frames: list[Image.Image] = []
         durations: list[int] = []
-        # ограничим кадры, чтобы не было тяжело
-        max_frames = 8
-        step = max(1, int(getattr(im, "n_frames", 1) // max_frames))
-        idx = 0
         try:
             n = int(getattr(im, "n_frames", 1))
         except Exception:
             n = 1
-        for fi in range(0, n, step):
+        n = max(1, n)
+
+        durs: list[int] = []
+        for i in range(n):
+            try:
+                im.seek(i)
+                durs.append(int(im.info.get("duration", 100) or 100))
+            except Exception:
+                durs.append(100)
+
+        target_ms = max(10, round(1000.0 / float(PROFILE_GIF_TARGET_FPS)))
+        m_out = min(PROFILE_GIF_MAX_FRAMES, n)
+        indices = _gif_even_frame_indices(n, m_out)
+
+        for j, fi in enumerate(indices):
             try:
                 im.seek(fi)
                 fr = im.convert("RGB")
@@ -228,14 +257,13 @@ class Profile(commands.Cog):
             card_rgb = card_rgb.resize((900, 383), Image.Resampling.LANCZOS)
             card = card_rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
             frames.append(card)
-            # Исходный GIF: duration в мс за один кадр. При step>1 пропускаем кадры — время на экране
-            # должно суммироваться, иначе анимация ускоряется во столько раз.
-            base_ms = int(getattr(im, "info", {}).get("duration", 100) or 100)
-            combined_ms = base_ms * step
-            durations.append(max(120, min(650, combined_ms)))
-            idx += 1
-            if idx >= max_frames:
-                break
+            fi_next = indices[j + 1] if j + 1 < len(indices) else n
+            chunk_ms = sum(durs[fi:fi_next])
+            if chunk_ms <= 0:
+                chunk_ms = target_ms
+            # Стандартная скорость цикла: время между выбранными кадрами; нижняя граница ~60 FPS
+            ms_out = max(target_ms, min(10000, chunk_ms))
+            durations.append(ms_out)
 
         if not frames:
             call_args = list(args)
