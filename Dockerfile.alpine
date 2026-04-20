@@ -1,0 +1,14 @@
+# Образ для хостингов на Alpine (нет apt — пакет называется opus, не libopus0).
+FROM python:3.11-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache ffmpeg opus \
+    && rm -rf /var/cache/apk/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "main.py"]

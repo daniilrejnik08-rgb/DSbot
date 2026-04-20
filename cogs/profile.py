@@ -6,6 +6,7 @@ import random
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -26,6 +27,33 @@ try:
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False
+    ImageFont = None  # type: ignore[misc, assignment]
+
+
+# Noto Sans (SIL OFL) в репозитории — кириллица в Docker/Linux, где нет Arial
+_FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+
+
+def load_cyrillic_font(size: int) -> Any:
+    """Шрифт с кириллицей для PIL: сначала локальный Noto, потом системные."""
+    if not _HAS_PIL or ImageFont is None:
+        raise RuntimeError("Pillow is not installed")
+    candidates: tuple[str | Path, ...] = (
+        _FONT_DIR / "NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\calibri.ttf",
+        "arial.ttf",
+    )
+    for path in candidates:
+        try:
+            return ImageFont.truetype(str(path), size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
 
 ANIME_BG_APIS: list[str] = [
@@ -248,19 +276,7 @@ class Profile(commands.Cog):
         return None
 
     def _load_font(self, size: int) -> Any:
-        paths = (
-            "arial.ttf",
-            r"C:\Windows\Fonts\arial.ttf",
-            r"C:\Windows\Fonts\segoeui.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        )
-        for path in paths:
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
+        return load_cyrillic_font(size)
 
     async def _fetch_bytes(self, url: str) -> bytes | None:
         if self._http is None:
@@ -756,12 +772,8 @@ class Profile(commands.Cog):
         W, H = 900, 320
         img = Image.new("RGB", (W, H), (24, 24, 28))
         draw = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 18)
-            font_small = ImageFont.truetype("arial.ttf", 14)
-        except Exception:
-            font = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+        font = load_cyrillic_font(18)
+        font_small = load_cyrillic_font(14)
 
         pad = 50
         draw.rectangle((pad, pad, W - pad, H - pad), outline=(130, 130, 150), width=2)

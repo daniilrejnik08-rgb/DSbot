@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies for voice/music playback.
+# ffmpeg + libopus для музыки в голосе. Если хостинг без apt — см. Dockerfile.alpine
+# или переменная окружения OPUS_LIBRARY_PATH=/полный/путь/libopus.so.0
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libopus0 \
+    && apt-get install -y --no-install-recommends ffmpeg libopus0 fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

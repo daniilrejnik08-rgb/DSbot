@@ -1,3 +1,4 @@
+import glob as glob_module
 import logging
 import os
 
@@ -7,28 +8,76 @@ from discord.ext import commands
 log = logging.getLogger(__name__)
 
 
+def _opus_candidate_paths() -> list[str]:
+    """Пути к libopus на Debian/Ubuntu/Alpine и кастомных хостингах (bothost и др.)."""
+    out: list[str] = []
+    env = os.getenv("OPUS_LIBRARY_PATH", "").strip()
+    if env:
+        out.append(env)
+
+    try:
+        import ctypes.util
+
+        found = ctypes.util.find_library("opus")
+        if found:
+            out.append(found)
+    except Exception:
+        pass
+
+    out.extend(
+        (
+            "/usr/lib/x86_64-linux-gnu/libopus.so.0",
+            "/usr/lib/aarch64-linux-gnu/libopus.so.0",
+            "/lib/x86_64-linux-gnu/libopus.so.0",
+            "/lib/aarch64-linux-gnu/libopus.so.0",
+            "/usr/lib/libopus.so.0",
+            "/lib/libopus.so.0",
+            "/usr/lib/libopus.so",
+            "libopus.so.0",
+        )
+    )
+
+    for pattern in (
+        "/usr/lib/*/libopus.so.0",
+        "/usr/lib/*/libopus.so",
+        "/lib/*/libopus.so.0",
+        "/lib/*/libopus.so",
+    ):
+        try:
+            out.extend(glob_module.glob(pattern))
+        except OSError:
+            continue
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
 def ensure_opus_loaded() -> bool:
-    """Явно подключает libopus (в slim-образах авто-поиск часто не находит библиотеку)."""
+    """Подключает libopus; на хостинге без пакета задайте OPUS_LIBRARY_PATH к файлу .so."""
     try:
         if discord.opus.is_loaded():
             return True
     except AttributeError:
         pass
-    for path in (
-        "/usr/lib/x86_64-linux-gnu/libopus.so.0",
-        "/usr/lib/aarch64-linux-gnu/libopus.so.0",
-        "/usr/lib/libopus.so.0",
-        "libopus.so.0",
-    ):
+
+    for path in _opus_candidate_paths():
         try:
             discord.opus.load_opus(path)
             log.info("Opus загружен (%s)", path)
             return True
         except Exception:
             continue
+
     log.warning(
-        "Opus не загружен: музыка в голосе не заработает. "
-        "В Docker установите libopus0 и пересоберите образ."
+        "Opus не загружен — музыка в голосе не будет работать. "
+        "В панели bothost.ru: установите системный пакет opus/libopus "
+        "(или соберите образ с ffmpeg + libopus0 / apk add opus) "
+        "либо укажите полный путь к библиотеке в переменной OPUS_LIBRARY_PATH."
     )
     return False
 
