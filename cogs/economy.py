@@ -79,9 +79,19 @@ class Economy(commands.Cog):
         if tier < 1 or tier > 7:
             tier = 1
             data["daily_tier"] = tier
+        streak = int(data.get("daily_streak", 0))
+        if streak < 0:
+            streak = 0
+            data["daily_streak"] = 0
 
         if data["last_daily"]:
             last = datetime.fromisoformat(data["last_daily"])
+            # если пропуск больше 48ч — сброс лестницы и стрика (классическое daily)
+            if datetime.now() - last > timedelta(hours=48):
+                tier = 1
+                streak = 0
+                data["daily_tier"] = 1
+                data["daily_streak"] = 0
             if datetime.now() - last < timedelta(hours=24):
                 remaining = timedelta(hours=24) - (datetime.now() - last)
                 h, m = remaining.seconds // 3600, (remaining.seconds % 3600) // 60
@@ -92,7 +102,7 @@ class Economy(commands.Cog):
                     files.append(discord.File(io.BytesIO(png), filename="daily.png"))
                 emb = discord.Embed(
                     title="⏰ Ежедневная награда",
-                    description=f"Следующий бонус через **{h}** ч **{m}** мин.",
+                    description=f"Следующий бонус через **{h}** ч **{m}** мин.\nСтрик: **{streak}**",
                     color=GOLD,
                 )
                 if files:
@@ -103,6 +113,9 @@ class Economy(commands.Cog):
                 await interaction.followup.send(**kw)
                 return
 
+        # успешное получение: повышаем стрик и двигаем лестницу
+        streak += 1
+        data["daily_streak"] = streak
         bonus = DAILY_COIN_REWARDS[tier - 1]
         new_tier = 1 if tier >= 7 else tier + 1
         data["last_daily"] = datetime.now().isoformat()
@@ -117,7 +130,7 @@ class Economy(commands.Cog):
             files.append(discord.File(io.BytesIO(png), filename="daily.png"))
         emb = discord.Embed(
             title="🎁 Ежедневная награда",
-            description=f"День **{tier}/7** — начислено **{bonus:,}** 🪙",
+            description=f"День **{tier}/7** — начислено **{bonus:,}** 🪙\nСтрик: **{streak}**",
             color=GOLD,
         )
         if files:

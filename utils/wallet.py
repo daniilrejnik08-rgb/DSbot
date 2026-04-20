@@ -17,6 +17,7 @@ def _default_user() -> dict[str, Any]:
         "inventory": [],
         "last_daily": None,
         "daily_tier": 1,
+        "daily_streak": 0,
         "last_work": None,
         "suspicion": 0,
         "ledger": [],
