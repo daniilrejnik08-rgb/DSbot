@@ -1,3 +1,5 @@
+import asyncio
+import io
 import random
 
 import discord
@@ -5,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import Wallet
+from utils.ui_render import has_pillow, render_arcade_result_png
 
 try:
     from utils.theme import BRAND, DANGER, GOLD, SUCCESS
@@ -103,10 +106,10 @@ class BlackjackView(discord.ui.View):
         d = self.hand_value(self.dealer_hand)
         gid, uid = interaction.guild.id, self.player.id
         if d > 21 or p > d:
-            Wallet.add_balance(gid, uid, self.bet * 2)
+            Wallet.add_balance(gid, uid, self.bet * 2, ledger=("Игры", "блэкджек · победа"))
             status = f"Победа! Получено **{self.bet * 2}** 🪙"
         elif p == d:
-            Wallet.add_balance(gid, uid, self.bet)
+            Wallet.add_balance(gid, uid, self.bet, ledger=("Игры", "блэкджек · ничья"))
             status = "Ничья — ставка возвращена."
         else:
             status = "Дилер выиграл."
@@ -151,14 +154,14 @@ class HighLowView(discord.ui.View):
         uid = self.player.id
         a, b = self.first, self.second
         if a == b:
-            Wallet.add_balance(gid, uid, self.bet)
+            Wallet.add_balance(gid, uid, self.bet, ledger=("Игры", "Hi-Lo · ничья"))
             text = f"Выпало **{self._label(b)}** — ничья, ставка возвращена."
             col = GOLD
         else:
             higher = b > a
             win = (pick == "higher" and higher) or (pick == "lower" and not higher)
             if win:
-                Wallet.add_balance(gid, uid, self.bet * 2)
+                Wallet.add_balance(gid, uid, self.bet * 2, ledger=("Игры", "Hi-Lo · победа"))
                 text = f"Выпало **{self._label(b)}** — выигрыш **{self.bet * 2}** 🪙"
                 col = SUCCESS
             else:
@@ -185,6 +188,39 @@ class Games(commands.Cog):
         data = Wallet.get(interaction.guild.id, interaction.user.id)
         return data["balance"] >= bet
 
+    async def _send_arcade_card(
+        self,
+        interaction: discord.Interaction,
+        *,
+        title: str,
+        headline: str,
+        detail: str,
+        footer: str,
+        accent_rgb: tuple[int, int, int],
+        embed_color: discord.Color,
+    ) -> None:
+        parts = [headline, detail, footer]
+        desc = "\n".join(p for p in parts if p)
+        if has_pillow():
+            await interaction.response.defer()
+            png = await asyncio.to_thread(
+                render_arcade_result_png,
+                title=title,
+                headline=headline,
+                detail=detail,
+                footer=footer,
+                accent_rgb=accent_rgb,
+            )
+            emb = discord.Embed(title=title, description=desc, color=embed_color)
+            emb.set_image(url="attachment://arcade.png")
+            await interaction.followup.send(
+                embed=emb,
+                file=discord.File(io.BytesIO(png), filename="arcade.png"),
+            )
+        else:
+            emb = discord.Embed(title=title, description=desc, color=embed_color)
+            await interaction.response.send_message(embed=emb)
+
     @app_commands.command(name="coinflip", description="Монетка: орёл или решка")
     @app_commands.describe(bet="Ставка", choice="Сторона")
     @app_commands.choices(
@@ -197,40 +233,70 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет или неверная ставка.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         result = random.choice(["heads", "tails"])
         win = choice == result
         side_ru = "орёл" if result == "heads" else "решка"
-        embed = discord.Embed(title="🪙 Coinflip", color=SUCCESS if win else DANGER)
         if win:
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, bet * 2)
-            embed.description = f"Выпало **{side_ru}** — выигрыш **{bet * 2}** 🪙"
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, bet * 2, ledger=("Игры", "coinflip · выигрыш")
+            )
+            headline, detail = "Победа!", f"Выпало **{side_ru}** — выигрыш **{bet * 2}** 🪙"
+            accent = (95, 220, 160)
         else:
-            embed.description = f"Выпало **{side_ru}** — **-{bet}** 🪙"
-        await interaction.response.send_message(embed=embed)
+            headline, detail = "Проигрыш", f"Выпало **{side_ru}** — **−{bet}** 🪙"
+            accent = (230, 90, 110)
+        await self._send_arcade_card(
+            interaction,
+            title="🪙 Монетка",
+            headline=headline,
+            detail=detail,
+            footer=f"Ставка {bet} 🪙",
+            accent_rgb=accent,
+            embed_color=SUCCESS if win else DANGER,
+        )
 
     @app_commands.command(name="dice", description="Угадать число на кубике 1–6")
     async def dice(self, interaction: discord.Interaction, bet: int, number: app_commands.Range[int, 1, 6]):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         result = random.randint(1, 6)
-        embed = discord.Embed(title="🎲 Кубик", color=BRAND)
         if result == number:
             win = bet * 6
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
-            embed.description = f"Выпало **{result}** — джекпот **{win}** 🪙"
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "кубик · джекпот")
+            )
+            headline, detail = "Джекпот!", f"Выпало **{result}** — **{win}** 🪙"
+            accent = (255, 200, 110)
+            col = GOLD
         else:
-            embed.description = f"Выпало **{result}**, вы выбрали **{number}**."
-        await interaction.response.send_message(embed=embed)
+            headline, detail = "Мимо", f"Выпало **{result}**, вы выбрали **{number}**."
+            accent = (140, 170, 220)
+            col = BRAND
+        await self._send_arcade_card(
+            interaction,
+            title="🎲 Кубик",
+            headline=headline,
+            detail=detail,
+            footer=f"Ставка {bet} 🪙",
+            accent_rgb=accent,
+            embed_color=col,
+        )
 
     @app_commands.command(name="slots", description="Слоты — три в ряд")
     async def slots(self, interaction: discord.Interaction, bet: int):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         emojis = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣"]
         result = [random.choice(emojis) for _ in range(3)]
         if result[0] == result[1] == result[2]:
@@ -239,21 +305,39 @@ class Games(commands.Cog):
             x = 2
         else:
             x = 0
-        embed = discord.Embed(title="🎰 Слоты", description=f"**{result[0]} │ {result[1]} │ {result[2]}**", color=GOLD)
+        line = f"{result[0]} │ {result[1]} │ {result[2]}"
         if x > 0:
             win = int(bet * x)
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
-            embed.add_field(name="Выигрыш", value=f"**{win}** 🪙  (×{x})", inline=False)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "слоты · выигрыш")
+            )
+            headline = f"Выигрыш ×{x}"
+            detail = f"{line}\n**+{win}** 🪙"
+            accent = (255, 215, 120)
+            col = GOLD
         else:
-            embed.add_field(name="Результат", value=f"Ставка **{bet}** 🪙", inline=False)
-        await interaction.response.send_message(embed=embed)
+            headline = "Без совпадений"
+            detail = f"{line}"
+            accent = (130, 150, 190)
+            col = BRAND
+        await self._send_arcade_card(
+            interaction,
+            title="🎰 Слоты",
+            headline=headline,
+            detail=detail,
+            footer=f"Ставка {bet} 🪙",
+            accent_rgb=accent,
+            embed_color=col,
+        )
 
     @app_commands.command(name="blackjack", description="Блэкджек против дилера")
     async def blackjack(self, interaction: discord.Interaction, bet: int):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         view = BlackjackView(interaction.user, bet, self)
         embed = discord.Embed(
             title="🃏 Блэкджек",
@@ -268,13 +352,17 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         embed = discord.Embed(title="🔫 Русская рулетка", color=DANGER)
         if random.randint(1, 6) == 1:
             embed.description = "💥 Проигрыш всей ставки."
         else:
             win = bet * 2
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "рулетка · выигрыш")
+            )
             embed.description = f"Пронесло! **+{win}** 🪙"
         await interaction.response.send_message(embed=embed)
 
@@ -283,12 +371,16 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         secret = random.randint(1, 10)
         embed = discord.Embed(title="🎯 Угадай число", color=BRAND)
         if number == secret:
             win = bet * 9
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "угадай число")
+            )
             embed.description = f"Загадано **{secret}** — точное попадание! **{win}** 🪙"
         else:
             embed.description = f"Загадано **{secret}**, вы выбрали **{number}**."
@@ -306,7 +398,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         bot_pick = random.choice(["rock", "scissors", "paper"])
         names = {"rock": "Камень", "scissors": "Ножницы", "paper": "Бумага"}
         beats = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
@@ -314,10 +408,14 @@ class Games(commands.Cog):
         embed.add_field(name="Вы", value=names[pick], inline=True)
         embed.add_field(name="Бот", value=names[bot_pick], inline=True)
         if pick == bot_pick:
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, bet)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "КНБ · ничья")
+            )
             embed.description = "Ничья — ставка возвращена."
         elif beats[pick] == bot_pick:
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, bet * 2)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, bet * 2, ledger=("Игры", "КНБ · победа")
+            )
             embed.description = f"Победа! **{bet * 2}** 🪙"
         else:
             embed.description = "Поражение."
@@ -328,7 +426,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         sectors = [0, 0.5, 1, 1.5, 2, 2.5, 3, 0.5]
         mult = random.choice(sectors)
         embed = discord.Embed(title="🎡 Колесо", color=GOLD)
@@ -336,7 +436,9 @@ class Games(commands.Cog):
             embed.description = "Сектор **0** — ставка сгорела."
         else:
             win = int(bet * mult)
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "колесо фортуны")
+            )
             embed.description = f"Множитель **×{mult}** → **{win}** 🪙"
         await interaction.response.send_message(embed=embed)
 
@@ -345,13 +447,17 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         crash_at = round(random.uniform(1.15, 6.5), 2)
         cashout = round(random.uniform(0.8, 7.0), 2)
         embed = discord.Embed(title="📉 Crash", color=BRAND)
         if cashout < crash_at:
             win = int(bet * cashout)
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "crash · кэшаут")
+            )
             embed.description = (
                 f"Краш на **{crash_at}×**, вы вышли на **{cashout}×**\n"
                 f"Выигрыш: **{win}** 🪙"
@@ -365,7 +471,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         first = random.randint(2, 14)
         labels = {14: "Туз", 11: "Валет", 12: "Дама", 13: "Король"}
         lab = labels.get(first, str(first))
@@ -399,7 +507,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         q = random.choice(self.TRIVIA_BANK)
         player_id = interaction.user.id
         gid = interaction.guild.id
@@ -421,7 +531,7 @@ class Games(commands.Cog):
                     c.disabled = True
                 if idx == q["a"]:
                     win = int(bet * 2.2)
-                    Wallet.add_balance(gid, player_id, win)
+                    Wallet.add_balance(gid, player_id, win, ledger=("Игры", "викторина"))
                     text = f"✅ Верно! **+{win}** 🪙"
                     col = SUCCESS
                 else:
@@ -458,7 +568,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         x = 0.0
         path = []
         for _ in range(10):
@@ -474,7 +586,9 @@ class Games(commands.Cog):
             embed.description = "Слот **0×** — ставка сгорела."
         else:
             win = int(bet * m)
-            Wallet.add_balance(interaction.guild.id, interaction.user.id, win)
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "plinko")
+            )
             embed.description = f"Множитель **×{m}** → **{win}** 🪙"
         await interaction.response.send_message(embed=embed)
 
@@ -483,7 +597,9 @@ class Games(commands.Cog):
         if not self._ensure_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(interaction.guild.id, interaction.user.id, bet)
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
         bomb = random.randint(0, 8)
         uid = interaction.user.id
         gid = interaction.guild.id
@@ -512,7 +628,7 @@ class Games(commands.Cog):
                     )
                 else:
                     win = int(bet * 1.35)
-                    Wallet.add_balance(gid, uid, win)
+                    Wallet.add_balance(gid, uid, win, ledger=("Игры", "сапёр"))
                     emb = discord.Embed(
                         title="✅ Безопасно",
                         description=f"Выигрыш **{win}** 🪙 (ставка {bet})",

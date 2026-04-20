@@ -155,17 +155,17 @@ async def help_command(interaction: discord.Interaction):
 
     embed.add_field(
         name='💰 Экономика',
-        value='`/balance`, `/daily`, `/work`, `/pay`, `/deposit`, `/withdraw`, `/rob`, `/leaderboard`, `/shop`, `/buy`, `/inventory`, `/audit_risk`',
+        value='`/economy_hub` (панель кнопками), `/balance`, `/daily`, `/work`, `/pay`, `/deposit`, `/withdraw`, `/rob`, `/leaderboard`, `/shop`, `/buy`, `/inventory`, `/audit_risk`',
         inline=False
     )
     embed.add_field(
         name='👤 Профиль',
-        value='`/profile` (картинка с аниме-фоном), `/daily_login`',
+        value='`/profile` (картинка + кнопки: кастом, достижения, журнал монет), `/daily_login`, `/achievements`, `/profile_stats`',
         inline=False
     )
     embed.add_field(
         name='🛡️ Кланы',
-        value='`/clan_create`, `/clan_join`, `/clan_info`, `/clan_bank_deposit`, `/clan_quest_claim`, `/clan_war`, `/clan_top`',
+        value='`/clan_create`, `/clan_join`, `/clan_info`, `/clan_show`, `/clan_bank_deposit`, `/clan_quest_claim`, `/clan_war`, `/clan_top`',
         inline=False
     )
     embed.add_field(
@@ -175,7 +175,7 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='🎮 Игры',
-        value='`/coinflip`, `/dice`, `/slots`, `/blackjack`, `/roulette`, `/guess`, `/rps`, `/wheel`, `/crash`, `/highlow`, `/trivia`, `/plinko`, `/mines`, `/duel`, `/boss_join`',
+        value='Ставки с баланса 🪙 — `/coinflip`, `/dice`, `/slots`, `/blackjack`, `/roulette`, `/guess`, `/rps`, `/wheel`, `/crash`, `/highlow`, `/trivia`, `/plinko`, `/mines`, `/duel`, `/boss_join`',
         inline=False
     )
     embed.add_field(

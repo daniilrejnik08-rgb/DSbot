@@ -160,11 +160,11 @@ class Profile(commands.Cog):
 
     def _achievement_defs(self) -> list[dict[str, Any]]:
         return [
-            {"id": "lvl_10", "name": "Level 10", "coins": 1200},
-            {"id": "lvl_25", "name": "Level 25", "coins": 3500},
-            {"id": "msg_500", "name": "500 messages", "coins": 1800},
-            {"id": "streak_7", "name": "7-day login streak", "coins": 1400},
-            {"id": "rich_100k", "name": "100k total coins", "coins": 2600},
+            {"id": "lvl_10", "name": "Уровень 10", "coins": 1200},
+            {"id": "lvl_25", "name": "Уровень 25", "coins": 3500},
+            {"id": "msg_500", "name": "500 сообщений", "coins": 1800},
+            {"id": "streak_7", "name": "Серия входов 7 дней", "coins": 1400},
+            {"id": "rich_100k", "name": "100 000 монет всего", "coins": 2600},
         ]
 
     def _is_achievement_done(self, ach_id: str, profile: dict[str, Any], eco: dict[str, Any]) -> bool:
@@ -542,6 +542,53 @@ class Profile(commands.Cog):
         img.convert("RGB").save(out, format="PNG", optimize=True)
         return out.getvalue()
 
+    def build_ledger_embed(self, guild_id: int, member: discord.Member) -> discord.Embed:
+        eco = Wallet.get(guild_id, member.id)
+        raw = list(reversed(eco.get("ledger", [])[:20]))
+        if not raw:
+            text = (
+                "Записей пока нет. Здесь появятся **ежедневка**, **работа**, **игры**, "
+                "**магазин**, **переводы**, **банк**."
+            )
+        else:
+            lines: list[str] = []
+            for e in raw:
+                dt = str(e.get("ts", ""))[:19].replace("T", " ")
+                kind = str(e.get("k", ""))
+                d = int(e.get("d", 0))
+                note = str(e.get("n", ""))
+                sgn = "+" if d > 0 else ""
+                line = f"`{dt}` **{kind}** {sgn}{d} 🪙"
+                if note:
+                    line += f"\n　_{note}_"
+                lines.append(line)
+            text = "\n".join(lines)
+        emb = discord.Embed(
+            title=f"📉 Движение монет · {member.display_name}",
+            description=text[:4090],
+            color=BRAND,
+        )
+        emb.set_footer(text="Журнал наличных · /economy_hub — игры и баланс")
+        return emb
+
+    def build_achievements_embed(self, guild_id: int, member: discord.Member) -> discord.Embed:
+        p = self.get_profile(guild_id, member.id)
+        self._ensure_meta(p)
+        eco = Wallet.get(guild_id, member.id)
+        claimed = set(p.get("achievements_claimed", []))
+        lines: list[str] = []
+        for ach in self._achievement_defs():
+            done = self._is_achievement_done(ach["id"], p, eco)
+            icon = "✅" if ach["id"] in claimed else ("🟨" if done else "⬜")
+            lines.append(f"{icon} **{ach['name']}** — `{ach['id']}` — **{ach['coins']}** 🪙")
+        emb = discord.Embed(
+            title=f"🏆 Достижения · {member.display_name}",
+            description="\n".join(lines),
+            color=BRAND,
+        )
+        emb.set_footer(text="✅ забрано · 🟨 готово к /achievement_claim · ⬜ в процессе")
+        return emb
+
     @app_commands.command(name="profile", description="Профиль (картинка) + случайный аниме-фон")
     async def profile(self, interaction: discord.Interaction, member: discord.Member | None = None):
         member = member or interaction.user
@@ -612,10 +659,14 @@ class Profile(commands.Cog):
         )
 
         file = discord.File(io.BytesIO(png), filename="profile.png")
-        embed = discord.Embed(color=BRAND)
+        embed = discord.Embed(
+            title=f"Профиль · {member.display_name}",
+            color=BRAND,
+        )
         embed.set_image(url="attachment://profile.png")
-        embed.set_footer(text="/daily_login • /balance • /leaderboard")
-        await interaction.followup.send(embed=embed, file=file)
+        embed.set_footer(text="Кнопки ниже · /daily_login · /economy_hub")
+        view = ProfileMenuView(self, member, interaction.user)
+        await interaction.followup.send(embed=embed, file=file, view=view)
 
     @app_commands.command(name="daily_login", description="Ежедневная серия входа")
     async def daily_login(self, interaction: discord.Interaction):
@@ -701,11 +752,15 @@ class Profile(commands.Cog):
             await interaction.response.send_message("🔒 Achievement is not completed yet.", ephemeral=True)
             return
         reward = int(defs[aid]["coins"])
-        eco["balance"] = int(eco.get("balance", 0)) + reward
-        Wallet.save(interaction.guild.id, interaction.user.id, eco)
+        Wallet.add_balance(
+            interaction.guild.id,
+            interaction.user.id,
+            reward,
+            ledger=("Достижение", defs[aid]["name"]),
+        )
         p["achievements_claimed"].append(aid)
         self.save_profile(interaction.guild.id, interaction.user.id, p)
-        await interaction.response.send_message(f"🎉 Claimed **{defs[aid]['name']}**: +{reward} coins")
+        await interaction.response.send_message(f"🎉 **{defs[aid]['name']}** — получено **{reward}** 🪙")
 
     @app_commands.command(name="profile_style", description="Стиль карточки профиля")
     @app_commands.choices(
@@ -802,6 +857,125 @@ class Profile(commands.Cog):
         embed = discord.Embed(title=f"Profile history • {member.display_name}", color=BRAND)
         embed.set_image(url="attachment://profile_history.png")
         await interaction.followup.send(embed=embed, file=file)
+
+
+class ProfileTitleModal(discord.ui.Modal, title="Титул в карточке"):
+    inp = discord.ui.TextInput(
+        label="До 28 символов (пусто — сброс)",
+        max_length=28,
+        required=False,
+        style=discord.TextStyle.short,
+    )
+
+    def __init__(self, cog: Profile):
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        p["title"] = str(self.inp.value).strip()
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(
+            "✅ Титул сохранён. Вызовите `/profile` ещё раз, чтобы обновить картинку.",
+            ephemeral=True,
+        )
+
+
+class ProfileStyleSelect(discord.ui.Select):
+    def __init__(self, cog: Profile):
+        opts = [
+            discord.SelectOption(label="Тёмный", value="dark", emoji="🌑"),
+            discord.SelectOption(label="Неон", value="neon", emoji="💜"),
+            discord.SelectOption(label="Минимализм", value="minimal", emoji="⬜"),
+        ]
+        super().__init__(placeholder="Стиль карточки (сохраняется в профиль)…", min_values=1, max_values=1, options=opts)
+        self.cog = cog
+
+    async def callback(self, interaction: discord.Interaction):
+        v = self.values[0]
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        p["style"] = v
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(
+            f"✅ Стиль **{v}** сохранён. Снова `/profile` для новой картинки.",
+            ephemeral=True,
+        )
+
+
+class ProfileCustomizeView(discord.ui.View):
+    def __init__(self, cog: Profile):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.add_item(ProfileStyleSelect(cog))
+
+    @discord.ui.button(label="Титул в карточке…", style=discord.ButtonStyle.secondary, row=1)
+    async def title_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(ProfileTitleModal(self.cog))
+
+
+class ProfileMenuView(discord.ui.View):
+    def __init__(self, cog: Profile, target: discord.Member, viewer: discord.Member):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.target = target
+        self.viewer = viewer
+
+    def _ok(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.viewer.id
+
+    @discord.ui.button(label="Кастомизация", style=discord.ButtonStyle.primary, emoji="🎨", row=0)
+    async def cust(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        if self.target.id != self.viewer.id:
+            await interaction.response.send_message("Кастомизация только **своего** профиля.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Стиль и титул:",
+            view=ProfileCustomizeView(self.cog),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Достижения", style=discord.ButtonStyle.secondary, emoji="🏆", row=0)
+    async def ach(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=self.cog.build_achievements_embed(interaction.guild.id, self.target),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Движение монет", style=discord.ButtonStyle.secondary, emoji="📉", row=0)
+    async def led(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=self.cog.build_ledger_embed(interaction.guild.id, self.target),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Игры и экономика", style=discord.ButtonStyle.success, emoji="🎮", row=1)
+    async def eco(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        emb = discord.Embed(
+            title="🎮 Игры и экономика",
+            color=BRAND,
+            description=(
+                "Ставки в играх списываются с **наличных** 🪙 и попадают в журнал «Движение монет».\n\n"
+                "**Игры:** `/coinflip` `/dice` `/slots` `/blackjack` `/roulette` `/guess` `/rps` "
+                "`/wheel` `/crash` `/highlow` `/trivia` `/plinko` `/mines` …\n"
+                "**Экономика:** `/balance` `/daily` `/work` `/pay` `/deposit` `/withdraw` `/shop` `/buy`"
+            ),
+        )
+        emb.add_field(name="Панель", value="`/economy_hub` — кнопки экономики", inline=False)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
