@@ -106,8 +106,19 @@ class Profile(commands.Cog):
         self._http: aiohttp.ClientSession | None = None
         self._profile_render_cd: dict[int, float] = {}
         self._voice_session_start: dict[tuple[int, int], float] = {}
-        self._bg_dir = Path(os.getenv("DATA_DIR", "data")) / "profile_backgrounds"
-        self._bg_dir.mkdir(parents=True, exist_ok=True)
+        # Папка кастомных фонов. На хостингах каталог может быть read-only — не падаем при ошибке.
+        base_dir = Path(os.getenv("DATA_DIR", "data"))
+        self._bg_dir = base_dir / "profile_backgrounds"
+        try:
+            self._bg_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # fallback в локальную data/ (на случай если DATA_DIR недоступен)
+            self._bg_dir = Path("data") / "profile_backgrounds"
+            try:
+                self._bg_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                # последний fallback — текущая директория; команды будут работать, но загрузка может быть недоступна
+                self._bg_dir = Path(".") / "profile_backgrounds"
 
     async def cog_load(self) -> None:
         if self._http is None:

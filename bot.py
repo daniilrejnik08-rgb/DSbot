@@ -101,28 +101,34 @@ class ProBot(commands.Bot):
     async def setup_hook(self):
         cogs_dir = "cogs"
         if not os.path.isdir(cogs_dir):
-            print("⚠️ Папка cogs не найдена")
+            log.warning("Папка cogs не найдена")
             return
         for filename in os.listdir(cogs_dir):
             if filename.endswith(".py") and not filename.startswith("__"):
                 try:
                     await self.load_extension(f"cogs.{filename[:-3]}")
-                    print(f'✅ Загружен ког: {filename[:-3]}')
+                    log.info("Загружен ког: %s", filename[:-3])
                 except Exception as e:
-                    print(f'❌ Ошибка загрузки {filename}: {e}')
+                    log.exception("Ошибка загрузки %s: %s", filename, e)
 
-        await self.tree.sync()
-        print('🌍 Слеш-команды синхронизированы')
+        # Глобальная синхронизация может появляться до ~1 часа.
+        # Поэтому дополнительно синкаем по гильдиям в on_ready (быстро).
+        try:
+            synced = await self.tree.sync()
+            log.info("Глобальная синхронизация: %s команд", len(synced))
+        except Exception:
+            log.exception("Глобальная синхронизация слеш-команд не удалась")
 
     async def on_ready(self):
-        print(f'''
-╔══════════════════════════════════════╗
-║  🤖 Бот запущен: {self.user.name}
-║  📊 Серверов: {len(self.guilds)}
-║  👥 Пользователей: {len(self.users)}
-║  💾 База данных: JSON
-╚══════════════════════════════════════╝
-        ''')
+        log.info("Бот запущен: %s | серверов=%s | пользователей=%s", getattr(self.user, "name", "?"), len(self.guilds), len(self.users))
+
+        # Быстрая синхронизация слешей по серверам (обычно появляется сразу).
+        for g in list(self.guilds):
+            try:
+                synced = await self.tree.sync(guild=discord.Object(id=g.id))
+                log.info("Guild sync: %s (%s) — %s команд", g.name, g.id, len(synced))
+            except Exception:
+                log.exception("Guild sync failed: %s (%s)", g.name, g.id)
 
         await self.change_presence(
             activity=discord.Activity(
