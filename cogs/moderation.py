@@ -103,6 +103,16 @@ class Moderation(commands.Cog):
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"✅ Удалено {len(deleted)} сообщений", ephemeral=True)
 
+    @commands.command(name="say")
+    @commands.has_permissions(manage_messages=True)
+    async def say_prefix(self, ctx: commands.Context, *, text: str):
+        """Префикс `!say`: отправить текст от имени бота (удаляет ваше сообщение)."""
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        await ctx.send(text)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Moderation(bot))

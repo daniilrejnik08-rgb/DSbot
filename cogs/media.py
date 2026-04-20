@@ -181,8 +181,10 @@ class Media(commands.Cog):
 
         if st.loop_mode == "one" and guild_id in self._now_playing and not vc.is_playing() and not vc.is_paused():
             item = self._now_playing[guild_id]
+            item_from_queue = False
         else:
             item = st.queue.pop(0)
+            item_from_queue = True
         url = item["url"]
         title = item["title"]
         try:
@@ -206,6 +208,24 @@ class Media(commands.Cog):
 
         def after(err: BaseException | None) -> None:
             self._after_play(guild_id, err)
+
+        if not discord.opus.is_loaded():
+            log.error("libopus не загружена — установите пакет libopus (например libopus0 в Docker).")
+            if item_from_queue:
+                st.queue.insert(0, item)
+            try:
+                vol_source.cleanup()
+            except Exception:
+                pass
+            ch_id = st.text_channel_id
+            if ch_id:
+                ch = guild.get_channel(ch_id)
+                if isinstance(ch, discord.TextChannel):
+                    await ch.send(
+                        "❌ На сервере не установлена библиотека **Opus** (нужна для голоса). "
+                        "В Docker добавьте пакет `libopus0` и пересоберите образ."
+                    )
+            return
 
         vc.play(vol_source, after=after)
         self._now_playing[guild_id] = item
@@ -272,6 +292,14 @@ class Media(commands.Cog):
                 loop = asyncio.get_event_loop()
                 url, title = await loop.run_in_executor(None, extract_audio_sync, q)
             except Exception as e:
+                err = str(e).lower()
+                if "unsupported url" in err:
+                    await interaction.followup.send(
+                        "❌ Этот сайт не поддерживается (yt-dlp). "
+                        "Используйте **YouTube**, **SoundCloud** (если доступно) или **прямую ссылку** на аудиофайл (.mp3, .ogg…).",
+                        ephemeral=True,
+                    )
+                    return
                 await interaction.followup.send(f"❌ Не удалось получить аудио: `{e}`", ephemeral=True)
                 return
             if not url:
@@ -289,6 +317,14 @@ class Media(commands.Cog):
             loop = asyncio.get_event_loop()
             url, title = await loop.run_in_executor(None, extract_audio_sync, q)
         except Exception as e:
+            err = str(e).lower()
+            if "unsupported url" in err:
+                await interaction.followup.send(
+                    "❌ Этот сайт не поддерживается (yt-dlp). "
+                    "Используйте **YouTube** или **прямую ссылку** на аудиофайл.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(f"❌ Поиск: `{e}`", ephemeral=True)
             return
         if not url:

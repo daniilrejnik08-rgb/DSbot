@@ -1,9 +1,53 @@
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import time
 
 from utils import JSONHandler
+
+try:
+    from utils.theme import BRAND
+except Exception:
+    BRAND = discord.Color.from_rgb(88, 101, 242)
+
+_ASSETS = Path(__file__).resolve().parent.parent / "assets"
+
+
+def _voice_banner_file() -> tuple[discord.File, str] | None:
+    """Картинка для embed: сначала ищется настоящая GIF (анимация), иначе статика.
+
+    Положите **оригинальную** гифку с диска как `assets/voice_panel_banner.gif`
+    (через чат Cursor часто сохраняется один кадр JPEG — анимацию так не восстановить).
+    """
+    for name in (
+        "voice_panel_banner.gif",
+        "voice_panel_banner.webp",
+        "voice_panel_banner.png",
+        "voice_panel_banner.jpg",
+        "voice_panel_static.jpg",
+    ):
+        path = _ASSETS / name
+        if path.is_file():
+            return discord.File(path, filename=name), name
+    return None
+
+
+def build_voice_panel_embed() -> discord.Embed:
+    return discord.Embed(
+        title="Приватная голосовая комната",
+        description=(
+            "Создайте канал через **➕ Create Channel**, зайдите в него — откроется управление.\n\n"
+            "・ **Комната** — замок, видимость в списке, имя и лимит слотов\n"
+            "・ **Участники** — новый владелец, кто может зайти и говорить, кик\n\n"
+            "*Ответы на нажатия видите только вы.*"
+        ),
+        color=BRAND,
+        timestamp=discord.utils.utcnow(),
+    ).set_footer(text="Панель для владельца временного войса")
 
 
 class VoiceRenameModal(discord.ui.Modal, title="Изменить название комнаты"):
@@ -110,12 +154,24 @@ class VoiceControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @discord.ui.button(label="Передать права", style=discord.ButtonStyle.primary, custom_id="voice:transfer")
+    @discord.ui.button(
+        label="Передать владельца",
+        emoji="👑",
+        style=discord.ButtonStyle.primary,
+        custom_id="voice:transfer",
+        row=0,
+    )
     async def transfer(self, interaction: discord.Interaction, _: discord.ui.Button):
-        view = VoiceMemberSelectView(self.cog, "transfer", "Выберите нового владельца")
+        view = VoiceMemberSelectView(self.cog, "transfer", "Новый владелец — из вашей комнаты")
         await interaction.response.send_message("Выберите участника:", view=view, ephemeral=True)
 
-    @discord.ui.button(label="Открыть/Закрыть", style=discord.ButtonStyle.secondary, custom_id="voice:lock_toggle")
+    @discord.ui.button(
+        label="Закрыть / открыть",
+        emoji="🔒",
+        style=discord.ButtonStyle.secondary,
+        custom_id="voice:lock_toggle",
+        row=0,
+    )
     async def lock_toggle(self, interaction: discord.Interaction, _: discord.ui.Button):
         channel, _ = await self.cog.ensure_owner_ephemeral(interaction)
         if not channel:
@@ -126,15 +182,33 @@ class VoiceControlView(discord.ui.View):
         await channel.set_permissions(interaction.guild.default_role, overwrite=overw)
         await interaction.response.send_message("🔒 Комната закрыта" if is_open else "🔓 Комната открыта", ephemeral=True)
 
-    @discord.ui.button(label="Изменить название", style=discord.ButtonStyle.secondary, custom_id="voice:rename")
+    @discord.ui.button(
+        label="Название",
+        emoji="✏️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="voice:rename",
+        row=0,
+    )
     async def rename(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(VoiceRenameModal(self.cog))
 
-    @discord.ui.button(label="Изменить лимит", style=discord.ButtonStyle.secondary, custom_id="voice:limit")
+    @discord.ui.button(
+        label="Лимит слотов",
+        emoji="👥",
+        style=discord.ButtonStyle.secondary,
+        custom_id="voice:limit",
+        row=0,
+    )
     async def limit(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(VoiceLimitModal(self.cog))
 
-    @discord.ui.button(label="Показать/Скрыть", style=discord.ButtonStyle.secondary, custom_id="voice:hide_toggle")
+    @discord.ui.button(
+        label="Скрыть / показать",
+        emoji="👁️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="voice:hide_toggle",
+        row=1,
+    )
     async def hide_toggle(self, interaction: discord.Interaction, _: discord.ui.Button):
         channel, _ = await self.cog.ensure_owner_ephemeral(interaction)
         if not channel:
@@ -145,19 +219,37 @@ class VoiceControlView(discord.ui.View):
         await channel.set_permissions(interaction.guild.default_role, overwrite=overw)
         await interaction.response.send_message("🙈 Комната скрыта" if visible else "👀 Комната видима", ephemeral=True)
 
-    @discord.ui.button(label="Доступ +/-", style=discord.ButtonStyle.success, custom_id="voice:access")
+    @discord.ui.button(
+        label="Доступ в комнату",
+        emoji="🔑",
+        style=discord.ButtonStyle.success,
+        custom_id="voice:access",
+        row=1,
+    )
     async def access(self, interaction: discord.Interaction, _: discord.ui.Button):
-        view = VoiceMemberSelectView(self.cog, "access", "Кому выдать/забрать доступ")
+        view = VoiceMemberSelectView(self.cog, "access", "Кому выдать или снять вход")
         await interaction.response.send_message("Выберите участника:", view=view, ephemeral=True)
 
-    @discord.ui.button(label="Говорить +/-", style=discord.ButtonStyle.success, custom_id="voice:speak")
+    @discord.ui.button(
+        label="Право говорить",
+        emoji="🎙️",
+        style=discord.ButtonStyle.success,
+        custom_id="voice:speak",
+        row=1,
+    )
     async def speak(self, interaction: discord.Interaction, _: discord.ui.Button):
-        view = VoiceMemberSelectView(self.cog, "speak", "Кому выдать/забрать право говорить")
+        view = VoiceMemberSelectView(self.cog, "speak", "Кому разрешить или запретить речь")
         await interaction.response.send_message("Выберите участника:", view=view, ephemeral=True)
 
-    @discord.ui.button(label="Выгнать", style=discord.ButtonStyle.danger, custom_id="voice:kick")
+    @discord.ui.button(
+        label="Выгнать",
+        emoji="👢",
+        style=discord.ButtonStyle.danger,
+        custom_id="voice:kick",
+        row=1,
+    )
     async def kick(self, interaction: discord.Interaction, _: discord.ui.Button):
-        view = VoiceMemberSelectView(self.cog, "kick", "Кого выгнать из комнаты")
+        view = VoiceMemberSelectView(self.cog, "kick", "Кого отключить от канала")
         await interaction.response.send_message("Выберите участника:", view=view, ephemeral=True)
 
 
@@ -214,19 +306,28 @@ class Voice(commands.Cog):
         self.save_guild_data(interaction.guild.id, data)
 
         panel_channel = interaction.guild.get_channel(data["control_channel_id"])
+        panel_line = "Панель не отправлена — выберите текстовый канал для панели."
         if isinstance(panel_channel, discord.TextChannel):
-            embed = discord.Embed(
-                title="Приватные комнаты",
-                description="Измените конфигурацию вашей комнаты с помощью панели управления.",
-                color=discord.Color.blurple(),
-            )
-            await panel_channel.send(embed=embed, view=VoiceControlView(self))
+            embed = build_voice_panel_embed()
+            banner = _voice_banner_file()
+            send_kw: dict = {"embed": embed, "view": VoiceControlView(self)}
+            if banner:
+                file_obj, fname = banner
+                embed.set_image(url=f"attachment://{fname}")
+                send_kw["file"] = file_obj
+            await panel_channel.send(**send_kw)
+            panel_line = f"Панель управления: {panel_channel.mention}"
 
-        await interaction.response.send_message(
-            f"✅ Система временных войсов включена.\n"
-            f"Генератор: {channel.mention}\n"
-            f"Кулдаун: {cooldown_seconds}с"
+        done = discord.Embed(
+            title="Голосовые комнаты готовы",
+            description=(
+                f"{channel.mention} — зайдите сюда, чтобы создать **свой** временный войс.\n"
+                f"Кулдаун: **{cooldown_seconds}** с\n"
+                f"{panel_line}"
+            ),
+            color=BRAND,
         )
+        await interaction.response.send_message(embed=done)
 
     @app_commands.command(name="voice_toggle", description="Включить или выключить систему временных войсов")
     @app_commands.default_permissions(manage_channels=True)

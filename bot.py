@@ -1,7 +1,10 @@
+import logging
 import os
 
 import discord
 from discord.ext import commands
+
+log = logging.getLogger(__name__)
 
 try:
     from utils.theme import BRAND
@@ -51,6 +54,16 @@ class ProBot(commands.Bot):
                 name=f'{len(self.guilds)} серверов | /help'
             )
         )
+
+    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("❌ Недостаточно прав для этой команды.")
+            return
+        if isinstance(error, commands.CheckFailure):
+            return
+        log.exception("Prefix command error: %s", error)
 
 
 bot = ProBot()
@@ -117,6 +130,11 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name='🎯 Мониторинг CS / Minecraft',
         value='`/servers`, `/server_add`, `/server_remove`, `/server_edit`, `/server_list`, `/servers_panel_setup`, `/servers_refresh`',
+        inline=False
+    )
+    embed.add_field(
+        name='🧠 ИИ-чат',
+        value='`/chat` — общение с ИИ',
         inline=False
     )
 

@@ -4,7 +4,7 @@ WORKDIR /app
 
 # System dependencies for voice/music playback.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libopus0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
