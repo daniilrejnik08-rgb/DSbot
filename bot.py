@@ -230,6 +230,11 @@ def run_bot() -> None:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise RuntimeError("Переменная окружения DISCORD_TOKEN не задана.")
+    gid = (os.getenv("GUILD_ID") or os.getenv("DISCORD_GUILD_ID") or "").strip()
+    if gid:
+        log.info("GUILD_ID установлен: %s (регистрация slash-команд в конкретный сервер)", gid)
+    else:
+        log.warning("GUILD_ID не задан — бот попытается регистрировать slash-команды глобально (лимит 100).")
     bot.run(token)
 
 
