@@ -4,6 +4,7 @@ import asyncio
 import io
 import random
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -37,6 +38,16 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+def _format_voice_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "0м."
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}ч {m}м." if m else f"{h}ч."
+    return f"{m}м."
+
+
 def _shorten(text: str, n: int) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= n:
@@ -60,10 +71,12 @@ class Profile(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db = JSONHandler("data/profiles.json")
+        self._clans_db = JSONHandler("data/clans.json")
         self.last_xp: dict[int, datetime] = {}
         self._bg_cache: list[bytes] = []
         self._http: aiohttp.ClientSession | None = None
         self._profile_render_cd: dict[int, float] = {}
+        self._voice_session_start: dict[tuple[int, int], float] = {}
 
     async def cog_load(self) -> None:
         if self._http is None:
@@ -102,6 +115,7 @@ class Profile(commands.Cog):
         profile.setdefault("pinned_badges", [])
         profile.setdefault("title", "")
         profile.setdefault("history", [])
+        profile.setdefault("voice_seconds", 0)
 
     def required_xp(self, level: int) -> int:
         return 80 + level * 45
@@ -183,6 +197,71 @@ class Profile(commands.Cog):
             except discord.Forbidden:
                 pass
 
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        if member.bot:
+            return
+        if before.channel == after.channel:
+            return
+        gid = member.guild.id
+        uid = member.id
+        key = (gid, uid)
+        now = time.time()
+        if before.channel:
+            start = self._voice_session_start.pop(key, None)
+            if start is not None:
+                dt = int(now - start)
+                if 0 < dt < 86400 * 14:
+                    p = self.get_profile(gid, uid)
+                    self._ensure_meta(p)
+                    p["voice_seconds"] = int(p.get("voice_seconds", 0)) + dt
+                    self.save_profile(gid, uid, p)
+        if after.channel:
+            self._voice_session_start[key] = now
+
+    def _messages_rank(self, guild_id: int, user_id: int) -> int | None:
+        prefix = f"{guild_id}."
+        rows: list[tuple[int, int]] = []
+        for k, v in self.db.data.items():
+            if not isinstance(k, str) or not k.startswith(prefix):
+                continue
+            try:
+                uid = int(k.split(".", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            rows.append((int(v.get("messages", 0)), uid))
+        rows.sort(key=lambda x: (-x[0], x[1]))
+        for i, (_, uid) in enumerate(rows, start=1):
+            if uid == user_id:
+                return i
+        return None
+
+    def _clan_name(self, guild_id: int, user_id: int) -> str | None:
+        clans = self._clans_db.get(str(guild_id), {})
+        if not isinstance(clans, dict):
+            return None
+        for clan in clans.values():
+            if not isinstance(clan, dict):
+                continue
+            if user_id in clan.get("members", []):
+                return str(clan.get("name", "")) or None
+        return None
+
+    def _load_font(self, size: int) -> Any:
+        paths = (
+            "arial.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\segoeui.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        )
+        for path in paths:
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
     async def _fetch_bytes(self, url: str) -> bytes | None:
         if self._http is None:
             await self.cog_load()
@@ -231,98 +310,220 @@ class Profile(commands.Cog):
         messages: int,
         streak: int,
         coins_total: int,
+        balance: int,
+        bank: int,
         badges: list[str],
         last_login_text: str,
         style: str,
         title_text: str,
         rep: int,
+        voice_label: str,
+        voice_seconds: int,
+        msg_rank: int | None,
+        clan_name: str | None,
     ) -> bytes:
-        W, H = 960, 360
-        if style == "neon":
-            base = Image.new("RGB", (W, H), (20, 12, 30))
-            bar_color = (170, 80, 255, 220)
-            panel_color = (24, 16, 36, 178)
-        elif style == "minimal":
-            base = Image.new("RGB", (W, H), (28, 28, 28))
-            bar_color = (130, 130, 130, 220)
-            panel_color = (20, 20, 20, 185)
-        else:
-            base = Image.new("RGB", (W, H), (24, 24, 28))
-            bar_color = (120, 140, 255, 210)
-            panel_color = (18, 18, 22, 170)
+        del style  # единый glass-стиль
+        W, H = 1100, 468
+        accent = (72, 196, 255)
+        accent_soft = (72, 196, 255, 55)
+        bg_dark = (10, 11, 16)
+        glass = (22, 24, 32, 210)
+        glass_edge = (120, 200, 255, 90)
+
+        base = Image.new("RGB", (W, H), bg_dark)
+        px = base.load()
+        for y in range(H):
+            t = y / max(H - 1, 1)
+            r = int(10 + t * 8)
+            g = int(11 + t * 10)
+            b = int(18 + t * 14)
+            for x in range(W):
+                px[x, y] = (r, g, b)
 
         if bg_bytes:
             try:
                 bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
                 bg = bg.resize((W, H), Image.Resampling.LANCZOS)
-                bg = bg.filter(ImageFilter.GaussianBlur(radius=2))
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=8))
+                bg = bg.point(lambda x: int(x * 0.35))
                 base.paste(bg, (0, 0))
             except Exception:
                 pass
 
-        base = base.convert("RGBA")
-        base.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, 120)))
-        draw = ImageDraw.Draw(base)
+        img = base.convert("RGBA")
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 115))
+        img.alpha_composite(overlay)
+        draw = ImageDraw.Draw(img)
 
-        try:
-            font_title = ImageFont.truetype("arial.ttf", 40)
-            font_big = ImageFont.truetype("arial.ttf", 28)
-            font = ImageFont.truetype("arial.ttf", 22)
-            font_small = ImageFont.truetype("arial.ttf", 18)
-        except Exception:
-            font_title = ImageFont.load_default()
-            font_big = ImageFont.load_default()
-            font = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+        font_xl = self._load_font(26)
+        font_md = self._load_font(17)
+        font_sm = self._load_font(15)
+        font_xs = self._load_font(13)
 
-        # Panel
-        panel = Image.new("RGBA", (W - 64, H - 64), panel_color)
-        panel_draw = ImageDraw.Draw(panel)
-        panel_draw.rounded_rectangle(
-            (0, 0, panel.size[0], panel.size[1]),
-            radius=22,
-            outline=(255, 255, 255, 70),
-            width=2,
+        cx0, cy0 = 24, 24
+        cw, ch = W - 48, H - 48
+        draw.rounded_rectangle((cx0, cy0, cx0 + cw, cy0 + ch), radius=22, fill=glass, outline=glass_edge, width=2)
+
+        pad = 36
+        col_left = cx0 + pad
+        col_mid = col_left + 228
+        col_right = col_mid + 448
+
+        av_size = 132
+        av_x, av_y = col_left, cy0 + pad
+        av_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+        av_img = av_img.resize((av_size, av_size), Image.Resampling.LANCZOS)
+        rad = 20
+        mask = Image.new("L", (av_size, av_size), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, av_size - 1, av_size - 1), radius=rad, fill=255)
+        avatar_layer = Image.new("RGBA", (av_size, av_size))
+        avatar_layer.paste(av_img, (0, 0), mask=mask)
+        glow = Image.new("RGBA", (av_size + 10, av_size + 10), (0, 0, 0, 0))
+        ImageDraw.Draw(glow).rounded_rectangle(
+            (2, 2, av_size + 7, av_size + 7),
+            radius=rad + 2,
+            outline=(*accent, 140),
+            width=3,
         )
-        base.alpha_composite(panel, (32, 32))
+        img.alpha_composite(glow, (av_x - 5, av_y - 5))
+        img.alpha_composite(avatar_layer, (av_x, av_y))
 
-        # Avatar
-        av = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-        av = av.resize((128, 128), Image.Resampling.LANCZOS)
-        mask = Image.new("L", (128, 128), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 127, 127), fill=255)
-        av_circle = Image.new("RGBA", (128, 128))
-        av_circle.paste(av, (0, 0), mask=mask)
-        base.alpha_composite(av_circle, (60, 76))
-        draw.ellipse((56, 72, 60 + 128 + 4, 76 + 128 + 4), outline=(255, 255, 255, 140), width=3)
-
-        # Header
-        draw.text((210, 66), _shorten(member_name, 24), fill=(255, 255, 255, 240), font=font_title)
-        draw.text((210, 112), f"Rank: {_rank_title(level)}", fill=(255, 255, 255, 160), font=font_small)
+        name_y = av_y + av_size + 14
+        draw.text((col_left, name_y), _shorten(member_name, 18), fill=(250, 252, 255, 255), font=font_xl)
+        sub = f"Lvl {level} · {_rank_title(level)}"
         if title_text:
-            draw.text((560, 112), _shorten(title_text, 26), fill=(255, 255, 255, 175), font=font_small)
+            sub += f" · {_shorten(title_text.strip(), 16)}"
+        draw.text((col_left, name_y + 34), sub, fill=(180, 190, 210, 255), font=font_sm)
+        line_y = name_y + 62
+        draw.line((col_left, line_y, col_left + 190, line_y), fill=(*accent, 200), width=2)
 
-        # XP bar
-        bar_x, bar_y = 210, 150
-        bar_w, bar_h = 640, 22
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=12, fill=(255, 255, 255, 45))
+        candy_y = line_y + 18
+        draw.text((col_left, candy_y), "Баланс", fill=(160, 175, 200, 255), font=font_xs)
+        draw.text((col_left + 72, candy_y), f"{balance:,} 🪙", fill=(240, 245, 255, 255), font=font_md)
+        medal_y = candy_y + 36
+        draw.text((col_left, medal_y), "Значки", fill=(160, 175, 200, 255), font=font_xs)
+        draw.text(
+            (col_left + 72, medal_y),
+            f"{len(badges)} шт.",
+            fill=(240, 245, 255, 255),
+            font=font_md,
+        )
+        draw.text((col_left, medal_y + 34), f"Сообщений: {messages:,}", fill=(160, 175, 200, 255), font=font_xs)
+
+        pill_w, pill_h = 200, 34
+        pill_x = col_mid + 120
+        pill_y = cy0 + pad + 6
+        draw.rounded_rectangle(
+            (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
+            radius=17,
+            fill=(18, 20, 28, 230),
+            outline=accent_soft,
+            width=1,
+        )
+        pill_text = "Статистика"
+        bbox = draw.textbbox((0, 0), pill_text, font=font_sm)
+        tw = bbox[2] - bbox[0]
+        draw.text((pill_x + (pill_w - tw) / 2, pill_y + 8), pill_text, fill=(220, 235, 255, 255), font=font_sm)
+
+        def stat_box(x: int, y: int, w: int, h: int, title: str, value: str) -> None:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=14, fill=(18, 20, 28, 200), outline=accent_soft, width=1)
+            draw.text((x + 12, y + 10), title, fill=(140, 155, 185, 255), font=font_xs)
+            draw.text((x + 12, y + 30), _shorten(value, 22), fill=(235, 242, 255, 255), font=font_md)
+
+        grid_top = pill_y + 48
+        gw, gh = 196, 72
+        gap = 14
+        stat_box(col_mid, grid_top, gw, gh, "Находится в", voice_label)
+        stat_box(col_mid + gw + gap, grid_top, gw, gh, "Голосовой онлайн", _format_voice_duration(voice_seconds))
+        rank_txt = f"{msg_rank} место" if msg_rank is not None else "—"
+        stat_box(col_mid, grid_top + gh + gap, gw, gh, "Топ по сообщениям", rank_txt)
+        stat_box(col_mid + gw + gap, grid_top + gh + gap, gw, gh, "Любимая комната", "Нет")
+
         ratio = 0.0 if need <= 0 else _clamp(xp / need, 0.0, 1.0)
-        fill_w = int(bar_w * ratio)
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=12, fill=bar_color)
-        xp_percent = int(ratio * 100)
-        draw.text((bar_x, bar_y + 30), f"Level {level}  |  XP {xp}/{need}  |  {xp_percent}%", fill=(255, 255, 255, 210), font=font)
+        xp_bar_y = grid_top + (gh + gap) * 2 + 18
+        xp_bar_x = col_mid
+        xp_bw = gw * 2 + gap
+        xp_bh = 12
+        draw.rounded_rectangle((xp_bar_x, xp_bar_y, xp_bar_x + xp_bw, xp_bar_y + xp_bh), radius=8, fill=(40, 44, 58, 255))
+        fill_w = int(xp_bw * ratio)
+        if fill_w > 0:
+            draw.rounded_rectangle(
+                (xp_bar_x, xp_bar_y, xp_bar_x + fill_w, xp_bar_y + xp_bh),
+                radius=8,
+                fill=(*accent, 240),
+            )
+        xp_txt = f"XP {xp}/{need} ({int(ratio * 100)}%) · Серия {streak}д · Репутация {rep}"
+        draw.text((xp_bar_x, xp_bar_y + 18), xp_txt, fill=(170, 185, 210, 255), font=font_xs)
 
-        # Stats
-        draw.text((210, 220), f"Messages: {messages}", fill=(255, 255, 255, 220), font=font_big)
-        draw.text((210, 255), f"Login streak: {streak}d", fill=(255, 255, 255, 220), font=font_big)
-        draw.text((560, 220), f"Coins total: {coins_total:,}", fill=(255, 255, 255, 220), font=font_big)
-        badge_text = ", ".join(badges[:4]) if badges else "No badges yet"
-        draw.text((560, 255), f"Badges: {_shorten(badge_text, 32)}", fill=(255, 255, 255, 220), font=font)
-        draw.text((560, 286), f"Last login: {last_login_text}", fill=(255, 255, 255, 170), font=font_small)
-        draw.text((210, 286), f"Reputation: {rep}", fill=(255, 255, 255, 170), font=font_small)
+        logo_x = col_right + 10
+        logo_y = cy0 + pad + 8
+        logo_s = 116
+        logo_layer = Image.new("RGBA", (logo_s, logo_s), (0, 0, 0, 0))
+        ld = ImageDraw.Draw(logo_layer)
+        cx = logo_s // 2
+        pts = [
+            (cx, 18),
+            (logo_s - 22, logo_s - 28),
+            (cx + 8, logo_s - 14),
+            (22, logo_s - 28),
+        ]
+        ld.polygon(pts, fill=(50, 160, 245, 230))
+        ld.ellipse((cx - 28, 24, cx + 28, 72), outline=(120, 220, 255, 200), width=3)
+        img.alpha_composite(logo_layer, (logo_x, logo_y))
+
+        card_inner = (26, 28, 36, 215)
+        partner_y = logo_y + logo_s + 14
+        ph, ph_h = logo_x - 16, 64
+        draw.rounded_rectangle(
+            (ph, partner_y, ph + 260, partner_y + ph_h),
+            radius=14,
+            fill=card_inner,
+            outline=accent_soft,
+            width=1,
+        )
+        draw.ellipse((ph + 14, partner_y + 14, ph + 48, partner_y + 48), outline=(90, 100, 120, 255), width=2)
+        draw.text((ph + 62, partner_y + 14), "Пары нет", fill=(230, 236, 250, 255), font=font_md)
+        draw.text((ph + 62, partner_y + 38), "Пусто", fill=(130, 145, 170, 255), font=font_sm)
+
+        clan_y = partner_y + ph_h + 12
+        draw.rounded_rectangle(
+            (ph, clan_y, ph + 260, clan_y + ph_h),
+            radius=14,
+            fill=card_inner,
+            outline=accent_soft,
+            width=1,
+        )
+        draw.text((ph + 14, clan_y + 10), "Клан", fill=(160, 175, 200, 255), font=font_xs)
+        if clan_name:
+            draw.text((ph + 14, clan_y + 28), _shorten(clan_name, 24), fill=(230, 236, 250, 255), font=font_md)
+        else:
+            draw.text((ph + 14, clan_y + 28), "Клана нет", fill=(230, 236, 250, 255), font=font_md)
+            draw.text((ph + 14, clan_y + 46), "Пусто", fill=(130, 145, 170, 255), font=font_sm)
+
+        badge_y = cy0 + ch - 52
+        slot_n = 7
+        slot_r = 15
+        total_w = slot_n * (slot_r * 2 + 10)
+        bx0 = cx0 + (cw - total_w) // 2
+        pinned = badges[:slot_n]
+        for i in range(slot_n):
+            sx = bx0 + i * (slot_r * 2 + 10)
+            sy = badge_y
+            draw.ellipse((sx, sy, sx + slot_r * 2, sy + slot_r * 2), fill=(30, 32, 42, 255), outline=accent_soft, width=1)
+            if i < len(pinned):
+                badge_line = pinned[i].strip()
+                glyph = badge_line[0] if badge_line else "·"
+                draw.text((sx + slot_r - 5, sy + slot_r - 10), glyph, fill=(210, 230, 255, 255), font=font_md)
+
+        draw.text(
+            (col_mid, cy0 + ch - 78),
+            f"Всего монет {coins_total:,} · банк {bank:,}",
+            fill=(140, 155, 180, 255),
+            font=font_xs,
+        )
 
         out = io.BytesIO()
-        base.convert("RGB").save(out, format="PNG", optimize=True)
+        img.convert("RGB").save(out, format="PNG", optimize=True)
         return out.getvalue()
 
     @app_commands.command(name="profile", description="Профиль (картинка) + случайный аниме-фон")
@@ -365,6 +566,11 @@ class Profile(commands.Cog):
             return
         bg_bytes = await self._anime_bg_bytes()
 
+        if member.voice and member.voice.channel:
+            voice_label = _shorten(member.voice.channel.name, 20)
+        else:
+            voice_label = "Не в войсе"
+
         png = await asyncio.to_thread(
             self._render_card_sync,
             member.display_name,
@@ -376,11 +582,17 @@ class Profile(commands.Cog):
             int(p["messages"]),
             int(p["daily_streak"]),
             coins_total,
+            int(eco.get("balance", 0)),
+            int(eco.get("bank", 0)),
             list(p.get("badges", [])),
             last_login_text,
             str(p.get("style", "dark")),
             str(p.get("title", "")),
             int(p.get("rep", 0)),
+            voice_label,
+            int(p.get("voice_seconds", 0)),
+            self._messages_rank(interaction.guild.id, member.id),
+            self._clan_name(interaction.guild.id, member.id),
         )
 
         file = discord.File(io.BytesIO(png), filename="profile.png")
