@@ -454,10 +454,10 @@ class Profile(commands.Cog):
         has_custom_bg = bg_bytes is not None
         # Если есть пользовательский фон (в т.ч. GIF), делаем стекло прозрачнее,
         # чтобы фон действительно был виден внутри карточки.
-        glass = (18, 20, 28, 95 if has_custom_bg else 210)
+        glass = (18, 20, 28, 35 if has_custom_bg else 210)
         glass_edge = (120, 200, 255, 90)
-        panel_fill = (18, 20, 28, 120 if has_custom_bg else 230)
-        stat_fill = (18, 20, 28, 110 if has_custom_bg else 200)
+        panel_fill = (18, 20, 28, 65 if has_custom_bg else 230)
+        stat_fill = (18, 20, 28, 55 if has_custom_bg else 200)
 
         base = Image.new("RGB", (W, H), bg_dark)
         px = base.load()
@@ -602,7 +602,7 @@ class Profile(commands.Cog):
         ld.ellipse((cx - 28, 24, cx + 28, 72), outline=(120, 220, 255, 200), width=3)
         img.alpha_composite(logo_layer, (logo_x, logo_y))
 
-        card_inner = (26, 28, 36, 110 if has_custom_bg else 215)
+        card_inner = (26, 28, 36, 45 if has_custom_bg else 215)
         partner_y = logo_y + logo_s + 14
         ph, ph_h = logo_x - 16, 64
         draw.rounded_rectangle(
