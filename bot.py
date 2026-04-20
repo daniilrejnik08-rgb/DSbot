@@ -3,6 +3,7 @@ import logging
 import os
 
 import discord
+from discord.ext.commands.errors import ExtensionFailed
 from discord.ext import commands
 from discord.app_commands.errors import CommandLimitReached
 
@@ -104,6 +105,12 @@ class ProBot(commands.Bot):
         if not os.path.isdir(cogs_dir):
             log.warning("Папка cogs не найдена")
             return
+        enabled_env = os.getenv("ENABLED_COGS", "").strip()
+        enabled_set: set[str] | None = None
+        if enabled_env:
+            enabled_set = {x.strip().lower() for x in enabled_env.split(",") if x.strip()}
+            log.info("ENABLED_COGS активен: %s", ", ".join(sorted(enabled_set)))
+
         files = [f for f in os.listdir(cogs_dir) if f.endswith(".py") and not f.startswith("__")]
         # Сначала важные коги, чтобы при лимите slash-команд первыми были профиль/экономика/игры.
         priority = [
@@ -116,9 +123,13 @@ class ProBot(commands.Bot):
 
         for filename in files:
             if filename.endswith(".py") and not filename.startswith("__"):
+                cog_name = filename[:-3]
+                if enabled_set is not None and cog_name.lower() not in enabled_set:
+                    log.info("Пропуск кога %s (не входит в ENABLED_COGS)", cog_name)
+                    continue
                 try:
-                    await self.load_extension(f"cogs.{filename[:-3]}")
-                    log.info("Загружен ког: %s", filename[:-3])
+                    await self.load_extension(f"cogs.{cog_name}")
+                    log.info("Загружен ког: %s", cog_name)
                 except CommandLimitReached as e:
                     log.error(
                         "Достигнут лимит slash-команд (%s) при загрузке %s. "
@@ -127,6 +138,17 @@ class ProBot(commands.Bot):
                         filename,
                     )
                     break
+                except ExtensionFailed as e:
+                    cause = getattr(e, "__cause__", None)
+                    if isinstance(cause, CommandLimitReached):
+                        log.error(
+                            "Достигнут лимит slash-команд (%s) при загрузке %s. "
+                            "Останавливаю загрузку оставшихся когов.",
+                            cause.limit,
+                            filename,
+                        )
+                        break
+                    log.exception("Ошибка загрузки %s: %s", filename, e)
                 except Exception as e:
                     log.exception("Ошибка загрузки %s: %s", filename, e)
 

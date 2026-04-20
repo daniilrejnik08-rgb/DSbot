@@ -264,6 +264,19 @@ class Games(commands.Cog):
             else:
                 await interaction.response.send_message(embed=emb)
 
+    @app_commands.command(name="game_select", description="Игры в одном Select-меню")
+    async def game_select(self, interaction: discord.Interaction):
+        emb = discord.Embed(
+            title="🎮 Arcade Select",
+            description=(
+                "Выберите игру из списка.\n"
+                "Для игр с выбором (монетка, кубик, КНБ, число) используется авто-выбор.\n"
+                "Ставка по умолчанию: **100** 🪙 (кнопка ниже меняет ставку)."
+            ),
+            color=BRAND,
+        )
+        await interaction.response.send_message(embed=emb, view=GameSelectView(self, interaction.user.id), ephemeral=True)
+
     @app_commands.command(name="coinflip", description="Монетка: орёл или решка")
     @app_commands.describe(bet="Ставка", choice="Сторона")
     @app_commands.choices(
@@ -823,6 +836,105 @@ class Games(commands.Cog):
         )
         embed.set_footer(text=f"Ставка {bet} 🪙")
         await interaction.response.send_message(embed=embed, view=view)
+
+
+class BetModal(discord.ui.Modal, title="Ставка для Select-игр"):
+    amount = discord.ui.TextInput(
+        label="Ставка (целое число)",
+        placeholder="Например: 100",
+        required=True,
+        max_length=9,
+    )
+
+    def __init__(self, view: "GameSelectView"):
+        super().__init__()
+        self.view_ref = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            bet = int(str(self.amount.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ Нужно ввести число.", ephemeral=True)
+            return
+        if bet <= 0:
+            await interaction.response.send_message("❌ Ставка должна быть больше 0.", ephemeral=True)
+            return
+        self.view_ref.bet = bet
+        await interaction.response.send_message(f"✅ Ставка: **{bet}** 🪙", ephemeral=True)
+
+
+class GameSelect(discord.ui.Select):
+    def __init__(self, cog: Games, owner_id: int, view_ref: "GameSelectView"):
+        self.cog = cog
+        self.owner_id = owner_id
+        self.view_ref = view_ref
+        options = [
+            discord.SelectOption(label="Монетка (авто-сторона)", value="coinflip", emoji="🪙"),
+            discord.SelectOption(label="Кубик (авто-число)", value="dice", emoji="🎲"),
+            discord.SelectOption(label="Слоты", value="slots", emoji="🎰"),
+            discord.SelectOption(label="Рулетка", value="roulette", emoji="🔫"),
+            discord.SelectOption(label="Wheel", value="wheel", emoji="🎡"),
+            discord.SelectOption(label="Crash", value="crash", emoji="📉"),
+            discord.SelectOption(label="КНБ (авто-жест)", value="rps", emoji="✊"),
+            discord.SelectOption(label="Угадай число (авто-число)", value="guess", emoji="🎯"),
+            discord.SelectOption(label="Higher / Lower", value="highlow", emoji="📈"),
+            discord.SelectOption(label="Блэкджек", value="blackjack", emoji="🃏"),
+        ]
+        super().__init__(placeholder="Выберите игру…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Это меню не для вас.", ephemeral=True)
+            return
+        bet = self.view_ref.bet
+        game = self.values[0]
+        if game == "coinflip":
+            await self.cog.coinflip.callback(self.cog, interaction, bet, random.choice(["heads", "tails"]))
+            return
+        if game == "dice":
+            await self.cog.dice.callback(self.cog, interaction, bet, random.randint(1, 6))
+            return
+        if game == "slots":
+            await self.cog.slots.callback(self.cog, interaction, bet)
+            return
+        if game == "roulette":
+            await self.cog.roulette.callback(self.cog, interaction, bet)
+            return
+        if game == "wheel":
+            await self.cog.wheel.callback(self.cog, interaction, bet)
+            return
+        if game == "crash":
+            await self.cog.crash.callback(self.cog, interaction, bet)
+            return
+        if game == "rps":
+            await self.cog.rps.callback(self.cog, interaction, bet, random.choice(["rock", "scissors", "paper"]))
+            return
+        if game == "guess":
+            await self.cog.guess.callback(self.cog, interaction, bet, random.randint(1, 10))
+            return
+        if game == "highlow":
+            await self.cog.highlow.callback(self.cog, interaction, bet)
+            return
+        if game == "blackjack":
+            await self.cog.blackjack.callback(self.cog, interaction, bet)
+            return
+        await interaction.response.send_message("Неизвестная игра.", ephemeral=True)
+
+
+class GameSelectView(discord.ui.View):
+    def __init__(self, cog: Games, owner_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.owner_id = owner_id
+        self.bet = 100
+        self.add_item(GameSelect(cog, owner_id, self))
+
+    @discord.ui.button(label="Ставка", style=discord.ButtonStyle.secondary, emoji="💸")
+    async def set_bet(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Это меню не для вас.", ephemeral=True)
+            return
+        await interaction.response.send_modal(BetModal(self))
 
 
 async def setup(bot: commands.Bot):

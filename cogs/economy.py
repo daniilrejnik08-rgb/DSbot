@@ -388,6 +388,15 @@ class Economy(commands.Cog):
         emb.set_footer(text="Журнал операций: /profile → «Движение монет»")
         await interaction.response.send_message(embed=emb, view=EconomyHubView(self))
 
+    @app_commands.command(name="eco_select", description="Экономика в одном Select-меню")
+    async def eco_select(self, interaction: discord.Interaction):
+        emb = discord.Embed(
+            title="💎 Экономика · Select",
+            description="Выберите действие из списка ниже.",
+            color=GOLD,
+        )
+        await interaction.response.send_message(embed=emb, view=EconomySelectView(self), ephemeral=True)
+
 
 class EconomyHubView(discord.ui.View):
     def __init__(self, cog: Economy):
@@ -405,6 +414,83 @@ class EconomyHubView(discord.ui.View):
         emb.add_field(name="Банк", value=f"{int(d['bank']):,} 🪙", inline=True)
         emb.add_field(name="Всего", value=f"{int(d['balance']) + int(d['bank']):,} 🪙", inline=True)
         await interaction.response.send_message(embed=emb, ephemeral=True)
+
+
+class EconomySelect(discord.ui.Select):
+    def __init__(self, cog: Economy):
+        self.cog = cog
+        options = [
+            discord.SelectOption(label="Баланс", value="bal", emoji="💰"),
+            discord.SelectOption(label="Ежедневная награда", value="daily", emoji="🎁"),
+            discord.SelectOption(label="Работа", value="work", emoji="💼"),
+            discord.SelectOption(label="Положить в банк", value="dep", emoji="🏦"),
+            discord.SelectOption(label="Снять из банка", value="wd", emoji="💵"),
+            discord.SelectOption(label="Магазин", value="shop", emoji="🛒"),
+            discord.SelectOption(label="Инвентарь", value="inv", emoji="🎒"),
+            discord.SelectOption(label="Топ богачей", value="top", emoji="🏆"),
+        ]
+        super().__init__(placeholder="Выберите действие…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        action = self.values[0]
+        if action == "bal":
+            await self.cog.balance.callback(self.cog, interaction, None)
+            return
+        if action == "daily":
+            await self.cog.daily.callback(self.cog, interaction)
+            return
+        if action == "work":
+            await self.cog.work.callback(self.cog, interaction)
+            return
+        if action == "dep":
+            await interaction.response.send_modal(EcoAmountModal(self.cog, mode="deposit"))
+            return
+        if action == "wd":
+            await interaction.response.send_modal(EcoAmountModal(self.cog, mode="withdraw"))
+            return
+        if action == "shop":
+            await self.cog.shop.callback(self.cog, interaction)
+            return
+        if action == "inv":
+            await self.cog.inventory.callback(self.cog, interaction, None)
+            return
+        if action == "top":
+            await self.cog.leaderboard.callback(self.cog, interaction)
+            return
+        await interaction.response.send_message("Неизвестное действие.", ephemeral=True)
+
+
+class EcoAmountModal(discord.ui.Modal):
+    amount = discord.ui.TextInput(
+        label="Сумма",
+        placeholder="Например: 500",
+        required=True,
+        max_length=10,
+    )
+
+    def __init__(self, cog: Economy, *, mode: str):
+        title = "Положить в банк" if mode == "deposit" else "Снять из банка"
+        super().__init__(title=title)
+        self.cog = cog
+        self.mode = mode
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(str(self.amount.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ Введите целое число.", ephemeral=True)
+            return
+        if self.mode == "deposit":
+            await self.cog.deposit.callback(self.cog, interaction, value)
+            return
+        await self.cog.withdraw.callback(self.cog, interaction, value)
+
+
+class EconomySelectView(discord.ui.View):
+    def __init__(self, cog: Economy):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.add_item(EconomySelect(cog))
 
     @discord.ui.button(label="Магазин", style=discord.ButtonStyle.secondary, emoji="🛒", row=0)
     async def shop_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
