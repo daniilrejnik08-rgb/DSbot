@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import Wallet
-from utils.ui_render import has_pillow, render_arcade_result_png, render_crash_result_png, render_slots_result_png
+from utils.ui_render import has_pillow, render_arcade_result_png, render_crash_result_png, render_slots_filmstrip_png
 
 try:
     from utils.theme import BRAND, DANGER, GOLD, SUCCESS
@@ -355,11 +355,12 @@ class Games(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.defer()
             png = await asyncio.to_thread(
-                render_slots_result_png,
+                render_slots_filmstrip_png,
                 bet=bet,
                 symbols=result,
                 mult=float(x),
                 win=win,
+                frames=3,
             )
             desc = f"Результат: **{result[0]} │ {result[1]} │ {result[2]}**"
             if win > 0:

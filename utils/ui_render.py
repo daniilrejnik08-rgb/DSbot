@@ -351,7 +351,25 @@ def render_slots_result_png(
     if not _HAS_PIL:
         raise RuntimeError("Pillow required")
 
-    W, H = 760, 360
+    return render_slots_filmstrip_png(bet=bet, symbols=symbols, mult=mult, win=win, frames=1)
+
+
+def render_slots_filmstrip_png(
+    *,
+    bet: int,
+    symbols: list[str],
+    mult: float,
+    win: int,
+    frames: int = 3,
+) -> bytes:
+    """«Анимация» слотов в одном PNG: 1–3 кадра (spin→spin→result)."""
+    if not _HAS_PIL:
+        raise RuntimeError("Pillow required")
+
+    frames = 1 if frames <= 1 else 2 if frames == 2 else 3
+    W0, H = 760, 360
+    gutter = 14
+    W = W0 * frames + gutter * (frames - 1)
     bg = (12, 13, 18)
     panel = (26, 28, 38)
     img = Image.new("RGB", (W, H), bg)
@@ -360,23 +378,12 @@ def render_slots_result_png(
 
     ok = win > 0
     accent = (255, 210, 120) if ok else (140, 170, 220)
-    outline = accent if ok else (70, 78, 96)
 
     f_t = _font(22)
     f_h = _font(28)
     f_s = _font(18)
     f_f = _font(14)
 
-    pad = 26
-    draw.rounded_rectangle((pad, pad, W - pad, H - pad), radius=22, fill=panel, outline=outline, width=2)
-    draw.rounded_rectangle((pad, pad, W - pad, pad + 10), radius=10, fill=_mix(accent, (20, 22, 30), 0.35))
-    draw.text((pad + 22, pad + 18), "🎰 Слоты", fill=accent, font=f_t)
-
-    headline = f"Выигрыш ×{mult:g}" if ok else "Без совпадений"
-    hb = draw.textbbox((0, 0), headline, font=f_h)
-    draw.text(((W - (hb[2] - hb[0])) // 2, pad + 56), headline, fill=(235, 240, 255), font=f_h)
-
-    # Symbol theme (labels + colors) — не зависит от emoji.
     theme: dict[str, tuple[str, tuple[int, int, int]]] = {
         "🍒": ("CHERRY", (235, 90, 110)),
         "🍋": ("LEMON", (255, 220, 120)),
@@ -384,27 +391,16 @@ def render_slots_result_png(
         "🍇": ("GRAPE", (160, 110, 255)),
         "💎": ("DIAMOND", (120, 200, 255)),
         "7️⃣": ("SEVEN", (255, 245, 210)),
-        # на случай если список символов будет другим
         "?": ("?", (170, 185, 210)),
     }
+    pool = [k for k in theme.keys() if k != "?"]
 
-    # reels area
-    rx0, ry0 = pad + 56, pad + 118
-    rx1, ry1 = W - pad - 56, H - pad - 72
-    reel_gap = 18
-    reel_w = (rx1 - rx0 - 2 * reel_gap) // 3
-    reel_h = ry1 - ry0
-    tile_h = int(reel_h * 0.28)
-    tile_gap = int(reel_h * 0.05)
-
-    # win detection for highlight
     a, b, c = (symbols + ["?"] * 3)[:3]
     uniq = len({a, b, c})
     hi = [False, False, False]
     if uniq == 1:
         hi = [True, True, True]
     elif uniq == 2:
-        # highlight the matching pair
         if a == b:
             hi = [True, True, False]
         elif a == c:
@@ -412,25 +408,39 @@ def render_slots_result_png(
         else:
             hi = [False, True, True]
 
-    # Draw three reels with fake motion (top/bottom faded random)
-    pool = list(theme.keys())
-    for i, sym in enumerate([a, b, c]):
-        x0 = rx0 + i * (reel_w + reel_gap)
-        y0 = ry0
-        x1 = x0 + reel_w
-        y1 = y0 + reel_h
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=18, outline=(70, 78, 96), width=2, fill=(20, 22, 30))
+    def draw_panel(px: int, *, stage: str) -> None:
+        # stage: "spin1" | "spin2" | "result"
+        x_off = px * (W0 + gutter)
+        pad = 26
+        xL, xR = x_off + pad, x_off + W0 - pad
+        draw.rounded_rectangle((xL, pad, xR, H - pad), radius=22, fill=panel, outline=(accent if ok else (70, 78, 96)), width=2)
+        draw.rounded_rectangle((xL, pad, xR, pad + 10), radius=10, fill=_mix(accent, (20, 22, 30), 0.35))
+        draw.text((xL + 22, pad + 18), "🎰 Слоты", fill=accent, font=f_t)
 
-        def draw_tile(center_y: int, s: str, *, alpha: float, highlight: bool) -> None:
+        if stage == "result":
+            headline = f"Выигрыш ×{mult:g}" if ok else "Без совпадений"
+        else:
+            headline = "Прокрутка…"
+        hb = draw.textbbox((0, 0), headline, font=f_h)
+        draw.text((x_off + (W0 - (hb[2] - hb[0])) // 2, pad + 56), headline, fill=(235, 240, 255), font=f_h)
+
+        rx0, ry0 = x_off + pad + 56, pad + 118
+        rx1, ry1 = x_off + W0 - pad - 56, H - pad - 72
+        reel_gap = 18
+        reel_w = (rx1 - rx0 - 2 * reel_gap) // 3
+        reel_h = ry1 - ry0
+        tile_h = int(reel_h * 0.28)
+
+        def draw_tile(x0: int, x1: int, center_y: int, s: str, *, alpha: float, highlight: bool) -> None:
             lab, col = theme.get(s, theme["?"])
             col2 = _mix(col, (255, 255, 255), 0.15)
             base = _mix((40, 44, 58), col, 0.10 if highlight else 0.04)
-            base = _mix(base, (12, 13, 18), 1 - alpha)
+            base = _mix(base, bg, 1 - alpha)
             ox = 8
             ty0 = center_y - tile_h // 2
             ty1 = ty0 + tile_h
             draw.rounded_rectangle((x0 + ox, ty0, x1 - ox, ty1), radius=14, fill=base, outline=col if highlight else (60, 66, 82), width=2)
-            # icon: diamond / 7 / fruit as simple shapes
+
             icx = (x0 + x1) // 2
             icy = center_y - 6
             if lab == "DIAMOND":
@@ -440,30 +450,52 @@ def render_slots_result_png(
             elif lab == "SEVEN":
                 draw.text((icx - 10, icy - 18), "7", fill=col2, font=_font(34))
             else:
-                # fruit: circle + leaf
                 r = 16
                 draw.ellipse((icx - r, icy - r, icx + r, icy + r), outline=col2, width=3)
                 draw.polygon([(icx, icy - r - 8), (icx + 10, icy - r), (icx - 6, icy - r + 2)], fill=_mix(col2, (255, 255, 255), 0.15))
             tb = draw.textbbox((0, 0), lab, font=f_s)
             draw.text((icx - (tb[2] - tb[0]) // 2, center_y + 20), lab, fill=_mix((170, 185, 210), col2, 0.25), font=f_s)
 
-        top_sym = random.choice(pool)
-        bot_sym = random.choice(pool)
-        draw_tile(ry0 + tile_h // 2 + 10, top_sym, alpha=0.35, highlight=False)
-        draw_tile((ry0 + ry1) // 2, sym, alpha=1.0, highlight=hi[i] and ok)
-        draw_tile(ry1 - tile_h // 2 - 10, bot_sym, alpha=0.35, highlight=False)
+        show = [a, b, c] if stage == "result" else [random.choice(pool), random.choice(pool), random.choice(pool)]
+        for i, sym in enumerate(show):
+            x0 = rx0 + i * (reel_w + reel_gap)
+            y0 = ry0
+            x1 = x0 + reel_w
+            y1 = y0 + reel_h
+            draw.rounded_rectangle((x0, y0, x1, y1), radius=18, outline=(70, 78, 96), width=2, fill=(20, 22, 30))
 
-        # motion lines
-        for k in range(6):
-            yy = y0 + 18 + k * int((reel_h - 36) / 5)
-            draw.line([(x0 + 16, yy), (x1 - 16, yy)], fill=(30, 34, 46), width=1)
+            top_sym = random.choice(pool)
+            bot_sym = random.choice(pool)
+            draw_tile(x0, x1, ry0 + tile_h // 2 + 10, top_sym, alpha=0.28, highlight=False)
+            draw_tile(
+                x0,
+                x1,
+                (ry0 + ry1) // 2,
+                sym,
+                alpha=1.0,
+                highlight=(hi[i] and ok and stage == "result"),
+            )
+            draw_tile(x0, x1, ry1 - tile_h // 2 - 10, bot_sym, alpha=0.28, highlight=False)
 
-    # footer
-    footer = f"Ставка {bet} 🪙"
-    if ok:
-        footer += f"  •  +{win} 🪙"
-    fb = draw.textbbox((0, 0), footer, font=f_f)
-    draw.text(((W - (fb[2] - fb[0])) // 2, H - pad - 40), footer, fill=(120, 135, 160), font=f_f)
+            for k in range(6):
+                yy = y0 + 18 + k * int((reel_h - 36) / 5)
+                draw.line([(x0 + 16, yy), (x1 - 16, yy)], fill=(30, 34, 46), width=1)
+
+        footer = f"Ставка {bet} 🪙"
+        if stage == "result" and ok:
+            footer += f"  •  +{win} 🪙"
+        fb = draw.textbbox((0, 0), footer, font=f_f)
+        draw.text((x_off + (W0 - (fb[2] - fb[0])) // 2, H - pad - 40), footer, fill=(120, 135, 160), font=f_f)
+
+    if frames == 1:
+        draw_panel(0, stage="result")
+    elif frames == 2:
+        draw_panel(0, stage="spin1")
+        draw_panel(1, stage="result")
+    else:
+        draw_panel(0, stage="spin1")
+        draw_panel(1, stage="spin2")
+        draw_panel(2, stage="result")
 
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)

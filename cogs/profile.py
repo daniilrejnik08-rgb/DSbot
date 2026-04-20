@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import random
 import re
 import time
@@ -105,6 +106,8 @@ class Profile(commands.Cog):
         self._http: aiohttp.ClientSession | None = None
         self._profile_render_cd: dict[int, float] = {}
         self._voice_session_start: dict[tuple[int, int], float] = {}
+        self._bg_dir = Path(os.getenv("DATA_DIR", "data")) / "profile_backgrounds"
+        self._bg_dir.mkdir(parents=True, exist_ok=True)
 
     async def cog_load(self) -> None:
         if self._http is None:
@@ -144,6 +147,88 @@ class Profile(commands.Cog):
         profile.setdefault("title", "")
         profile.setdefault("history", [])
         profile.setdefault("voice_seconds", 0)
+        profile.setdefault("bg_name", None)
+
+    def _sanitize_bg_name(self, name: str) -> str:
+        name = re.sub(r"\s+", "_", name.strip())
+        name = re.sub(r"[^a-zA-Z0-9_\-\.]+", "", name)
+        return name[:48].strip("._-") or "bg"
+
+    def _list_backgrounds(self) -> list[Path]:
+        if not self._bg_dir.exists():
+            return []
+        items = []
+        for p in self._bg_dir.glob("*"):
+            if p.is_file() and p.suffix.lower() in {".gif", ".png", ".jpg", ".jpeg", ".webp"}:
+                items.append(p)
+        return sorted(items, key=lambda x: x.name.lower())
+
+    def _get_bg_path(self, bg_name: str) -> Path | None:
+        n = self._sanitize_bg_name(bg_name)
+        for p in self._list_backgrounds():
+            if p.stem.lower() == n.lower() or p.name.lower() == n.lower():
+                return p
+        # allow exact filename with extension
+        candidate = self._bg_dir / n
+        if candidate.exists() and candidate.is_file():
+            return candidate
+        return None
+
+    def _render_profile_gif_sync(self, *args: Any, gif_bg_bytes: bytes) -> bytes:
+        """
+        Собирает анимированный профиль (GIF) поверх GIF-фона.
+        args совпадают с _render_card_sync, но вместо bg_bytes берём кадры GIF.
+        """
+        if not _HAS_PIL:
+            raise RuntimeError("Pillow required")
+        try:
+            im = Image.open(io.BytesIO(gif_bg_bytes))
+        except Exception:
+            # fallback: один кадр как PNG
+            return self._render_card_sync(*args, bg_bytes=None)  # type: ignore[arg-type]
+
+        frames: list[Image.Image] = []
+        durations: list[int] = []
+        # ограничим кадры, чтобы не было тяжело
+        max_frames = 14
+        step = max(1, int(getattr(im, "n_frames", 1) // max_frames))
+        idx = 0
+        try:
+            n = int(getattr(im, "n_frames", 1))
+        except Exception:
+            n = 1
+        for fi in range(0, n, step):
+            try:
+                im.seek(fi)
+                fr = im.convert("RGB")
+            except Exception:
+                continue
+            b = io.BytesIO()
+            fr.save(b, format="PNG")
+            png_bytes = self._render_card_sync(*args, bg_bytes=b.getvalue())  # type: ignore[arg-type]
+            card = Image.open(io.BytesIO(png_bytes)).convert("P", palette=Image.Palette.ADAPTIVE)
+            frames.append(card)
+            dur = int(getattr(im, "info", {}).get("duration", 70))
+            durations.append(max(40, min(140, dur)))
+            idx += 1
+            if idx >= max_frames:
+                break
+
+        if not frames:
+            return self._render_card_sync(*args, bg_bytes=None)  # type: ignore[arg-type]
+
+        out = io.BytesIO()
+        frames[0].save(
+            out,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=durations,
+            loop=0,
+            disposal=2,
+            optimize=True,
+        )
+        return out.getvalue()
 
     def required_xp(self, level: int) -> int:
         return 80 + level * 45
@@ -627,15 +712,29 @@ class Profile(commands.Cog):
         if not avatar_bytes:
             await interaction.followup.send("❌ Не удалось загрузить аватар.", ephemeral=True)
             return
-        bg_bytes = await self._anime_bg_bytes()
+        bg_bytes: bytes | None = None
+        bg_gif_bytes: bytes | None = None
+        bg_name = p.get("bg_name")
+        if isinstance(bg_name, str) and bg_name.strip():
+            path = self._get_bg_path(bg_name)
+            if path and path.exists():
+                try:
+                    raw = path.read_bytes()
+                    if path.suffix.lower() == ".gif":
+                        bg_gif_bytes = raw
+                    else:
+                        bg_bytes = raw
+                except Exception:
+                    bg_bytes = None
+        if bg_bytes is None and bg_gif_bytes is None:
+            bg_bytes = await self._anime_bg_bytes()
 
         if member.voice and member.voice.channel:
             voice_label = _shorten(member.voice.channel.name, 20)
         else:
             voice_label = "Не в войсе"
 
-        png = await asyncio.to_thread(
-            self._render_card_sync,
+        args = (
             member.display_name,
             avatar_bytes,
             bg_bytes,
@@ -658,12 +757,19 @@ class Profile(commands.Cog):
             self._clan_name(interaction.guild.id, member.id),
         )
 
-        file = discord.File(io.BytesIO(png), filename="profile.png")
+        if bg_gif_bytes:
+            gif = await asyncio.to_thread(self._render_profile_gif_sync, *args, gif_bg_bytes=bg_gif_bytes)
+            file = discord.File(io.BytesIO(gif), filename="profile.gif")
+            image_url = "attachment://profile.gif"
+        else:
+            png = await asyncio.to_thread(self._render_card_sync, *args)
+            file = discord.File(io.BytesIO(png), filename="profile.png")
+            image_url = "attachment://profile.png"
         embed = discord.Embed(
             title=f"Профиль · {member.display_name}",
             color=BRAND,
         )
-        embed.set_image(url="attachment://profile.png")
+        embed.set_image(url=image_url)
         embed.set_footer(text="Кнопки ниже · /daily_login · /economy_hub")
         view = ProfileMenuView(self, member, interaction.user)
         await interaction.followup.send(embed=embed, file=file, view=view)
@@ -784,6 +890,67 @@ class Profile(commands.Cog):
         p["title"] = title.strip()
         self.save_profile(interaction.guild.id, interaction.user.id, p)
         await interaction.response.send_message("✅ Title updated.", ephemeral=True)
+
+    @app_commands.command(name="profile_bg_list", description="Список доступных фонов профиля (GIF/PNG/JPG)")
+    async def profile_bg_list(self, interaction: discord.Interaction):
+        items = self._list_backgrounds()
+        if not items:
+            await interaction.response.send_message(
+                "Фоны не найдены. Загрузите: `/profile_bg_upload` (GIF/PNG/JPG/WebP).",
+                ephemeral=True,
+            )
+            return
+        lines = [f"- **{p.stem}** ({p.suffix.lower()})" for p in items[:40]]
+        if len(items) > 40:
+            lines.append(f"…и ещё {len(items) - 40}")
+        await interaction.response.send_message("Доступные фоны:\n" + "\n".join(lines), ephemeral=True)
+
+    @app_commands.command(name="profile_bg_set", description="Выбрать фон профиля по имени (из списка)")
+    @app_commands.describe(name="Имя фона (как в /profile_bg_list)")
+    async def profile_bg_set(self, interaction: discord.Interaction, name: str):
+        p = self.get_profile(interaction.guild.id, interaction.user.id)
+        self._ensure_meta(p)
+        path = self._get_bg_path(name)
+        if not path:
+            await interaction.response.send_message("❌ Фон не найден. Посмотрите список: `/profile_bg_list`", ephemeral=True)
+            return
+        p["bg_name"] = path.stem
+        self.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(f"✅ Фон профиля выбран: **{path.stem}**", ephemeral=True)
+
+    @app_commands.command(name="profile_bg_clear", description="Сбросить фон профиля (снова случайный аниме-фон)")
+    async def profile_bg_clear(self, interaction: discord.Interaction):
+        p = self.get_profile(interaction.guild.id, interaction.user.id)
+        self._ensure_meta(p)
+        p["bg_name"] = None
+        self.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message("✅ Фон сброшен. Вызовите `/profile` для обновления.", ephemeral=True)
+
+    @app_commands.command(name="profile_bg_upload", description="Загрузить фон профиля (GIF/PNG/JPG/WebP) в папку бота")
+    @app_commands.describe(name="Имя (опционально), под которым сохранить", file="Файл фона")
+    async def profile_bg_upload(self, interaction: discord.Interaction, file: discord.Attachment, name: str | None = None):
+        if file.size and file.size > 6_500_000:
+            await interaction.response.send_message("❌ Слишком большой файл. Максимум ~6.5MB.", ephemeral=True)
+            return
+        fname = name or Path(file.filename).stem
+        safe = self._sanitize_bg_name(fname)
+        ext = Path(file.filename).suffix.lower()
+        if ext not in {".gif", ".png", ".jpg", ".jpeg", ".webp"}:
+            await interaction.response.send_message("❌ Формат не поддерживается. Нужно GIF/PNG/JPG/WebP.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data = await file.read()
+        except Exception:
+            await interaction.followup.send("❌ Не удалось прочитать файл.", ephemeral=True)
+            return
+        out_path = self._bg_dir / f"{safe}{ext}"
+        try:
+            out_path.write_bytes(data)
+        except Exception:
+            await interaction.followup.send("❌ Не удалось сохранить файл на диске.", ephemeral=True)
+            return
+        await interaction.followup.send(f"✅ Загружено: **{out_path.stem}**\nВыбрать: `/profile_bg_set name:{out_path.stem}`", ephemeral=True)
 
     @app_commands.command(name="rep", description="Выдать +1 репутации пользователю (1 раз в сутки)")
     async def rep(self, interaction: discord.Interaction, member: discord.Member):
