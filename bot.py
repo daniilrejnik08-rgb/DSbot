@@ -105,11 +105,36 @@ class ProBot(commands.Bot):
         if not os.path.isdir(cogs_dir):
             log.warning("Папка cogs не найдена")
             return
+        # На бесплатных/ограниченных хостингах часто упираемся в лимит 100 глобальных slash-команд.
+        # Поэтому по умолчанию загружаем "облегчённый" набор; нужные коги можно включить через env.
+        default_disabled_cogs = {
+            "games",       # много мини-игр (много slash-команд)
+            "media",       # музыка/аудио команды
+            "cs_monitor",  # мониторинг серверов
+            "grow_tree",   # дерево (много команд)
+            "market",      # рынок
+            "tree_craft",  # крафт дерева
+            "automation",  # авто-настройки
+            "webpanel",    # webpanel токены
+            "combat",      # боевка
+            "chat_ai",     # ИИ-чат
+        }
         enabled_env = os.getenv("ENABLED_COGS", "").strip()
         enabled_set: set[str] | None = None
         if enabled_env:
             enabled_set = {x.strip().lower() for x in enabled_env.split(",") if x.strip()}
             log.info("ENABLED_COGS активен: %s", ", ".join(sorted(enabled_set)))
+        disabled_env = os.getenv("DISABLED_COGS", "").strip()
+        disabled_set: set[str] = set(default_disabled_cogs)
+        if disabled_env:
+            disabled_set.update({x.strip().lower() for x in disabled_env.split(",") if x.strip()})
+            log.info("DISABLED_COGS активен: %s", ", ".join(sorted(disabled_set)))
+        lite_mode = (os.getenv("LITE_MODE", "1").strip().lower() not in {"0", "false", "off", "no"})
+        if not lite_mode:
+            disabled_set.clear()
+            log.info("LITE_MODE выключен: попытка загрузить все коги")
+        else:
+            log.info("LITE_MODE включен: по умолчанию отключены второстепенные коги")
 
         files = [f for f in os.listdir(cogs_dir) if f.endswith(".py") and not f.startswith("__")]
         # Сначала важные коги, чтобы при лимите slash-команд первыми были профиль/экономика/игры.
@@ -126,6 +151,9 @@ class ProBot(commands.Bot):
                 cog_name = filename[:-3]
                 if enabled_set is not None and cog_name.lower() not in enabled_set:
                     log.info("Пропуск кога %s (не входит в ENABLED_COGS)", cog_name)
+                    continue
+                if enabled_set is None and cog_name.lower() in disabled_set:
+                    log.info("Пропуск кога %s (облегчённый режим)", cog_name)
                     continue
                 try:
                     await self.load_extension(f"cogs.{cog_name}")
