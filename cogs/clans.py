@@ -97,10 +97,13 @@ class Clans(commands.Cog):
         self.bot = bot
         self.db = JSONHandler("data/clans.json")
         self.max_members = 25
-        self.hourly_clan_war.start()
+        self._hourly_war_enabled = False
+        if self._hourly_war_enabled:
+            self.hourly_clan_war.start()
 
     async def cog_unload(self):
-        self.hourly_clan_war.cancel()
+        if self._hourly_war_enabled and self.hourly_clan_war.is_running():
+            self.hourly_clan_war.cancel()
 
     def get_clans(self, guild_id: int) -> dict:
         key = str(guild_id)

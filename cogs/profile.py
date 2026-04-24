@@ -149,6 +149,7 @@ class Profile(commands.Cog):
         self.bot = bot
         self.db = JSONHandler("data/profiles.json")
         self._clans_db = JSONHandler("data/clans.json")
+        self._bg_shop_db = JSONHandler("data/profile_background_shop.json")
         self.last_xp: dict[int, datetime] = {}
         self._bg_cache: list[bytes] = []
         self._http: aiohttp.ClientSession | None = None
@@ -207,6 +208,7 @@ class Profile(commands.Cog):
         profile.setdefault("history", [])
         profile.setdefault("voice_seconds", 0)
         profile.setdefault("bg_name", None)
+        profile.setdefault("bg_owned", [])
         profile.setdefault("outline_color", None)
 
     def _sanitize_bg_name(self, name: str) -> str:
@@ -233,6 +235,64 @@ class Profile(commands.Cog):
         if candidate.exists() and candidate.is_file():
             return candidate
         return None
+
+    def _bg_shop_key(self, guild_id: int) -> str:
+        return str(guild_id)
+
+    def _get_bg_shop(self, guild_id: int) -> dict[str, Any]:
+        data = self._bg_shop_db.get(self._bg_shop_key(guild_id), {})
+        if not isinstance(data, dict):
+            return {}
+        return data
+
+    def _save_bg_shop(self, guild_id: int, data: dict[str, Any]) -> None:
+        self._bg_shop_db.set(self._bg_shop_key(guild_id), data)
+
+    def _bg_catalog_items(self, guild_id: int) -> list[tuple[str, dict[str, Any]]]:
+        shop = self._get_bg_shop(guild_id)
+        rows: list[tuple[str, dict[str, Any]]] = []
+        for item_id, item in shop.items():
+            if not isinstance(item, dict):
+                continue
+            if not bool(item.get("enabled", True)):
+                continue
+            filename = str(item.get("filename", "")).strip()
+            if not filename:
+                continue
+            path = self._bg_dir / filename
+            if not path.exists() or not path.is_file():
+                continue
+            rows.append((str(item_id), item))
+        rows.sort(key=lambda x: str(x[1].get("name", x[0])).lower())
+        return rows
+
+    def _next_bg_item_id(self, guild_id: int) -> str:
+        shop = self._get_bg_shop(guild_id)
+        nums: list[int] = []
+        for k in shop.keys():
+            try:
+                nums.append(int(k))
+            except Exception:
+                continue
+        return str(max(nums, default=0) + 1)
+
+    def _profile_has_bg(self, profile: dict[str, Any], item_id: str) -> bool:
+        owned = profile.get("bg_owned", [])
+        if not isinstance(owned, list):
+            return False
+        return str(item_id) in {str(x) for x in owned}
+
+    def _grant_bg(self, profile: dict[str, Any], item_id: str) -> None:
+        owned_raw = profile.get("bg_owned", [])
+        owned = [str(x) for x in owned_raw] if isinstance(owned_raw, list) else []
+        sid = str(item_id)
+        if sid not in owned:
+            owned.append(sid)
+        profile["bg_owned"] = owned
+
+    def _catalog_item_bg_stem(self, item: dict[str, Any]) -> str:
+        filename = str(item.get("filename", "")).strip()
+        return Path(filename).stem
 
     def _render_profile_gif_sync(self, *args: Any, gif_bg_bytes: bytes) -> bytes:
         """
@@ -738,7 +798,7 @@ class Profile(commands.Cog):
                 except Exception:
                     bg_bytes = None
         if bg_bytes is None and bg_gif_bytes is None:
-            bg_bytes = await self._anime_bg_bytes()
+            bg_bytes = None
 
         if member.voice and member.voice.channel:
             voice_label = _shorten(member.voice.channel.name, 20)
@@ -843,32 +903,56 @@ class Profile(commands.Cog):
         self.save_profile(interaction.guild.id, interaction.user.id, p)
         await interaction.response.send_message(f"🎉 **{defs[aid]['name']}** — получено **{reward}** 🪙")
 
-    @app_commands.command(name="profile_bg_list", description="Список доступных фонов профиля (GIF/PNG/JPG)")
+    @app_commands.command(name="profile_bg_list", description="Список фонов в магазине профиля")
     async def profile_bg_list(self, interaction: discord.Interaction):
-        items = self._list_backgrounds()
+        items = self._bg_catalog_items(interaction.guild.id)
         if not items:
             await interaction.response.send_message(
-                "Фоны не найдены. Загрузите: `/profile_bg_upload` (GIF/PNG/JPG/WebP).",
+                "Каталог фонов пуст. Загрузите фон в магазин: `/profile_bg_upload`.",
                 ephemeral=True,
             )
             return
-        lines = [f"- **{p.stem}** ({p.suffix.lower()})" for p in items[:40]]
+        p = self.get_profile(interaction.guild.id, interaction.user.id)
+        self._ensure_meta(p)
+        lines = []
+        for item_id, item in items[:40]:
+            mark = "✅" if self._profile_has_bg(p, item_id) else "🛒"
+            lines.append(
+                f"{mark} **{item.get('name', item_id)}** · ID `{item_id}` · "
+                f"{int(item.get('price', 0)):,} 🪙"
+            )
         if len(items) > 40:
             lines.append(f"…и ещё {len(items) - 40}")
-        await interaction.response.send_message("Доступные фоны:\n" + "\n".join(lines), ephemeral=True)
+        await interaction.response.send_message("Фоны магазина:\n" + "\n".join(lines), ephemeral=True)
 
     @app_commands.command(name="profile_bg_set", description="Выбрать фон профиля по имени (из списка)")
     @app_commands.describe(name="Имя фона (как в /profile_bg_list)")
     async def profile_bg_set(self, interaction: discord.Interaction, name: str):
         p = self.get_profile(interaction.guild.id, interaction.user.id)
         self._ensure_meta(p)
-        path = self._get_bg_path(name)
-        if not path:
-            await interaction.response.send_message("❌ Фон не найден. Посмотрите список: `/profile_bg_list`", ephemeral=True)
+        items = self._bg_catalog_items(interaction.guild.id)
+        chosen_id: str | None = None
+        chosen_item: dict[str, Any] | None = None
+        query = str(name).strip().lower()
+        for item_id, item in items:
+            item_name = str(item.get("name", "")).strip().lower()
+            file_stem = Path(str(item.get("filename", ""))).stem.lower()
+            if query in {str(item_id).lower(), item_name, file_stem}:
+                chosen_id = item_id
+                chosen_item = item
+                break
+        if chosen_id is None or chosen_item is None:
+            await interaction.response.send_message(
+                "❌ Фон не найден в магазине. Откройте `/profile` → кнопка «Магазин фонов».",
+                ephemeral=True,
+            )
             return
-        p["bg_name"] = path.stem
+        if not self._profile_has_bg(p, chosen_id):
+            await interaction.response.send_message("❌ Этот фон сначала нужно купить в магазине профиля.", ephemeral=True)
+            return
+        p["bg_name"] = self._catalog_item_bg_stem(chosen_item)
         self.save_profile(interaction.guild.id, interaction.user.id, p)
-        await interaction.response.send_message(f"✅ Фон профиля выбран: **{path.stem}**", ephemeral=True)
+        await interaction.response.send_message(f"✅ Фон профиля выбран: **{chosen_item.get('name', chosen_id)}**", ephemeral=True)
 
     @app_commands.command(name="profile_bg_clear", description="Сбросить фон профиля (снова случайный аниме-фон)")
     async def profile_bg_clear(self, interaction: discord.Interaction):
@@ -878,9 +962,18 @@ class Profile(commands.Cog):
         self.save_profile(interaction.guild.id, interaction.user.id, p)
         await interaction.response.send_message("✅ Фон сброшен. Вызовите `/profile` для обновления.", ephemeral=True)
 
-    @app_commands.command(name="profile_bg_upload", description="Загрузить фон профиля (GIF/PNG/JPG/WebP) в папку бота")
-    @app_commands.describe(name="Имя (опционально), под которым сохранить", file="Файл фона")
-    async def profile_bg_upload(self, interaction: discord.Interaction, file: discord.Attachment, name: str | None = None):
+    @app_commands.command(name="profile_bg_upload", description="Загрузить фон в магазин профиля (админ)")
+    @app_commands.describe(name="Название фона", price="Цена в монетах", file="Файл фона")
+    async def profile_bg_upload(
+        self,
+        interaction: discord.Interaction,
+        file: discord.Attachment,
+        name: str,
+        price: app_commands.Range[int, 1, 500000],
+    ):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Загружать фоны в магазин может только администратор.", ephemeral=True)
+            return
         if file.size and file.size > 6_500_000:
             await interaction.response.send_message("❌ Слишком большой файл. Максимум ~6.5MB.", ephemeral=True)
             return
@@ -902,7 +995,20 @@ class Profile(commands.Cog):
         except Exception:
             await interaction.followup.send("❌ Не удалось сохранить файл на диске.", ephemeral=True)
             return
-        await interaction.followup.send(f"✅ Загружено: **{out_path.stem}**\nВыбрать: `/profile_bg_set name:{out_path.stem}`", ephemeral=True)
+        item_id = self._next_bg_item_id(interaction.guild.id)
+        shop = self._get_bg_shop(interaction.guild.id)
+        shop[item_id] = {
+            "name": str(name).strip()[:42],
+            "filename": out_path.name,
+            "price": int(price),
+            "uploader_id": interaction.user.id,
+            "enabled": True,
+        }
+        self._save_bg_shop(interaction.guild.id, shop)
+        await interaction.followup.send(
+            f"✅ Фон добавлен в магазин: **{name}** · `{price:,}` 🪙 · ID `{item_id}`",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="rep", description="Выдать +1 репутации пользователю (1 раз в сутки)")
     async def rep(self, interaction: discord.Interaction, member: discord.Member):
@@ -1030,6 +1136,244 @@ class ProfileCustomizeView(discord.ui.View):
         await interaction.response.send_modal(ProfileOutlineModal(self.cog))
 
 
+class BackgroundShopSelect(discord.ui.Select):
+    def __init__(self, view: "BackgroundShopView", options: list[discord.SelectOption]):
+        self.shop_view = view
+        super().__init__(
+            placeholder="Выбери фон для покупки/применения...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not isinstance(self.view, BackgroundShopView):
+            await interaction.response.send_message("❌ Ошибка интерфейса.", ephemeral=True)
+            return
+        self.view.selected_item_id = self.values[0]
+        pair = self.view._selected_item()
+        if pair is None:
+            await interaction.response.send_message("❌ Фон не найден.", ephemeral=True)
+            return
+        item_id, item = pair
+        p = self.view.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.view.cog._ensure_meta(p)
+        owned = self.view.cog._profile_has_bg(p, item_id)
+        title = str(item.get("name", item_id))
+        price = int(item.get("price", 0))
+        emb = discord.Embed(
+            title=f"🖼️ {title}",
+            description=(
+                f"Цена: **{price:,}** 🪙\n"
+                f"Статус: {'✅ уже куплен' if owned else '🛒 можно купить'}"
+            ),
+            color=BRAND,
+        )
+        path = self.view.cog._bg_dir / str(item.get("filename", ""))
+        if path.exists() and path.is_file():
+            try:
+                preview = discord.File(path, filename="bg_preview" + path.suffix.lower())
+                emb.set_image(url=f"attachment://{preview.filename}")
+                await interaction.response.send_message(
+                    embed=emb,
+                    file=preview,
+                    ephemeral=True,
+                )
+                return
+            except Exception:
+                pass
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
+
+class BackgroundShopView(discord.ui.View):
+    def __init__(self, cog: Profile, owner: discord.Member, viewer: discord.Member):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.owner = owner
+        self.viewer = viewer
+        self.selected_item_id: str | None = None
+        self.items_all = self.cog._bg_catalog_items(owner.guild.id)
+        self.page = 0
+        self.per_page = 6
+        self.select_menu: BackgroundShopSelect | None = None
+        self._rebuild_select()
+        self._update_nav_buttons()
+
+    def _viewer_ok(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.viewer.id == self.owner.id
+
+    def _total_pages(self) -> int:
+        if not self.items_all:
+            return 1
+        return (len(self.items_all) + self.per_page - 1) // self.per_page
+
+    def _page_items(self) -> list[tuple[str, dict[str, Any]]]:
+        start = self.page * self.per_page
+        end = start + self.per_page
+        return self.items_all[start:end]
+
+    def _rebuild_select(self) -> None:
+        if self.select_menu is not None:
+            self.remove_item(self.select_menu)
+        p = self.cog.get_profile(self.owner.guild.id, self.owner.id)
+        self.cog._ensure_meta(p)
+        options: list[discord.SelectOption] = []
+        for item_id, item in self._page_items():
+            price = int(item.get("price", 0))
+            owned = self.cog._profile_has_bg(p, item_id)
+            mark = "✅" if owned else "🛒"
+            options.append(
+                discord.SelectOption(
+                    label=str(item.get("name", item_id))[:100],
+                    value=str(item_id),
+                    description=f"{mark} {price:,} монет",
+                    default=str(item_id) == str(self.selected_item_id),
+                )
+            )
+        if not options:
+            options = [discord.SelectOption(label="Каталог пуст", value="none", description="Сначала загрузите фоны")]
+        self.select_menu = BackgroundShopSelect(self, options)
+        self.add_item(self.select_menu)
+
+    def _update_nav_buttons(self) -> None:
+        total = self._total_pages()
+        self.prev_btn.disabled = self.page <= 0
+        self.next_btn.disabled = self.page >= (total - 1)
+
+    def build_embed(self) -> discord.Embed:
+        p = self.cog.get_profile(self.owner.guild.id, self.owner.id)
+        self.cog._ensure_meta(p)
+        bal = int(Wallet.get(self.owner.guild.id, self.owner.id).get("balance", 0))
+        lines: list[str] = []
+        for item_id, item in self._page_items():
+            title = str(item.get("name", item_id))
+            price = int(item.get("price", 0))
+            owned = self.cog._profile_has_bg(p, item_id)
+            icon = "✅" if owned else "🛒"
+            lines.append(f"{icon} `{item_id}` **{title}** — **{price:,}** 🪙")
+        if not lines:
+            lines.append("Каталог пуст.")
+        emb = discord.Embed(
+            title="🖼️ Магазин фонов профиля",
+            description="\n".join(lines),
+            color=BRAND,
+        )
+        emb.add_field(name="Баланс", value=f"{bal:,} 🪙", inline=True)
+        emb.add_field(name="Куплено", value=str(sum(1 for i, _ in self.items_all if self.cog._profile_has_bg(p, i))), inline=True)
+        emb.add_field(name="Всего", value=str(len(self.items_all)), inline=True)
+        emb.set_footer(text=f"Страница {self.page + 1} из {self._total_pages()}")
+        return emb
+
+    async def refresh_message(self, interaction: discord.Interaction) -> None:
+        self.items_all = self.cog._bg_catalog_items(self.owner.guild.id)
+        total = self._total_pages()
+        if self.page > total - 1:
+            self.page = max(0, total - 1)
+        self._rebuild_select()
+        self._update_nav_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    def _selected_item(self) -> tuple[str, dict[str, Any]] | None:
+        if not self.selected_item_id:
+            return None
+        for item_id, item in self.items_all:
+            if str(item_id) == str(self.selected_item_id):
+                return item_id, item
+        return None
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, row=1)
+    async def prev_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._viewer_ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        if self.page > 0:
+            self.page -= 1
+        await self.refresh_message(interaction)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, row=1)
+    async def next_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._viewer_ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        if self.page < self._total_pages() - 1:
+            self.page += 1
+        await self.refresh_message(interaction)
+
+    @discord.ui.button(label="Купить", style=discord.ButtonStyle.success, emoji="🛒", row=1)
+    async def buy_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._viewer_ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        pair = self._selected_item()
+        if pair is None:
+            await interaction.response.send_message("Сначала выбери фон в списке.", ephemeral=True)
+            return
+        item_id, item = pair
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        if self.cog._profile_has_bg(p, item_id):
+            await interaction.response.send_message("✅ Этот фон уже куплен.", ephemeral=True)
+            return
+        price = int(item.get("price", 0))
+        eco = Wallet.get(interaction.guild.id, interaction.user.id)
+        if int(eco.get("balance", 0)) < price:
+            await interaction.response.send_message(
+                f"❌ Недостаточно средств. Нужно **{price:,}** 🪙.",
+                ephemeral=True,
+            )
+            return
+        Wallet.remove_balance(
+            interaction.guild.id,
+            interaction.user.id,
+            price,
+            ledger=("Фон профиля", f"покупка {item.get('name', item_id)}"),
+        )
+        self.cog._grant_bg(p, item_id)
+        p["bg_name"] = self.cog._catalog_item_bg_stem(item)
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(
+            f"✅ Куплено: **{item.get('name', item_id)}** за **{price:,}** 🪙.\n"
+            "Фон сразу применён. Открой `/profile`, чтобы увидеть карточку.",
+            ephemeral=True,
+        )
+        self.items_all = self.cog._bg_catalog_items(self.owner.guild.id)
+
+    @discord.ui.button(label="Применить", style=discord.ButtonStyle.primary, emoji="🖼️", row=1)
+    async def apply_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._viewer_ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        pair = self._selected_item()
+        if pair is None:
+            await interaction.response.send_message("Сначала выбери фон в списке.", ephemeral=True)
+            return
+        item_id, item = pair
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        if not self.cog._profile_has_bg(p, item_id):
+            await interaction.response.send_message("❌ Этот фон ещё не куплен.", ephemeral=True)
+            return
+        p["bg_name"] = self.cog._catalog_item_bg_stem(item)
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message(
+            f"✅ Применён фон: **{item.get('name', item_id)}**.\n"
+            "Открой `/profile` для обновления.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="Снять фон", style=discord.ButtonStyle.secondary, emoji="🧼", row=1)
+    async def clear_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._viewer_ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        p["bg_name"] = None
+        self.cog.save_profile(interaction.guild.id, interaction.user.id, p)
+        await interaction.response.send_message("✅ Фон снят. Открой `/profile` для обновления.", ephemeral=True)
+
+
 class ProfileMenuView(discord.ui.View):
     def __init__(self, cog: Profile, target: discord.Member, viewer: discord.Member):
         super().__init__(timeout=600)
@@ -1091,6 +1435,31 @@ class ProfileMenuView(discord.ui.View):
         )
         emb.add_field(name="Панель", value="`/economy_hub` — кнопки экономики", inline=False)
         await interaction.response.send_message(embed=emb, ephemeral=True)
+
+    @discord.ui.button(label="Магазин фонов", style=discord.ButtonStyle.secondary, emoji="🖼️", row=1)
+    async def bg_shop(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not self._ok(interaction):
+            await interaction.response.send_message("Это меню чужого профиля.", ephemeral=True)
+            return
+        if self.target.id != self.viewer.id:
+            await interaction.response.send_message("Магазин доступен только в своём профиле.", ephemeral=True)
+            return
+        items = self.cog._bg_catalog_items(interaction.guild.id)
+        if not items:
+            await interaction.response.send_message(
+                "Каталог фонов пока пуст. Администратор может загрузить фон через `/profile_bg_upload`.",
+                ephemeral=True,
+            )
+            return
+        p = self.cog.get_profile(interaction.guild.id, interaction.user.id)
+        self.cog._ensure_meta(p)
+        view = BackgroundShopView(self.cog, self.target, self.viewer)
+        emb = view.build_embed()
+        await interaction.response.send_message(
+            embed=emb,
+            view=view,
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
