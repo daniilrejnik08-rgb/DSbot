@@ -6,8 +6,31 @@ import discord
 from discord.ext.commands.errors import ExtensionFailed
 from discord.ext import commands
 from discord.app_commands.errors import CommandLimitReached
+from utils import target_guilds
 
 log = logging.getLogger(__name__)
+
+
+def _parse_disabled_commands(raw: str) -> list[str]:
+    out: list[str] = []
+    for part in raw.replace(";", ",").split(","):
+        name = part.strip().lower().lstrip("/")
+        if name:
+            out.append(name)
+    # preserve order, drop duplicates
+    return list(dict.fromkeys(out))
+
+
+def _disabled_app_commands() -> list[str]:
+    """
+    Список slash-команд для отключения из регистрации.
+    Можно задать через DISABLED_APP_COMMANDS: "eco_select,audit_risk,..."
+    """
+    raw = os.getenv("DISABLED_APP_COMMANDS", "").strip()
+    if not raw:
+        # По умолчанию убираем дублирующее меню экономики.
+        return ["eco_select"]
+    return _parse_disabled_commands(raw)
 
 
 def _opus_candidate_paths() -> list[str]:
@@ -180,6 +203,19 @@ class ProBot(commands.Bot):
                 except Exception as e:
                     log.exception("Ошибка загрузки %s: %s", filename, e)
 
+        disabled_cmds = _disabled_app_commands()
+        if disabled_cmds:
+            for cmd_name in disabled_cmds:
+                removed = self.tree.remove_command(cmd_name)
+                if removed is not None:
+                    log.info("Отключена глобальная slash-команда: /%s", cmd_name)
+            guild_targets = target_guilds() or []
+            for guild in guild_targets:
+                for cmd_name in disabled_cmds:
+                    removed = self.tree.remove_command(cmd_name, guild=guild)
+                    if removed is not None:
+                        log.info("Отключена guild slash-команда: /%s (guild=%s)", cmd_name, guild.id)
+
         # Глобальная синхронизация может появляться до ~1 часа.
         # Поэтому дополнительно синкаем по гильдиям в on_ready (быстро).
         try:
@@ -299,11 +335,14 @@ def run_bot() -> None:
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise RuntimeError("Переменная окружения DISCORD_TOKEN не задана.")
-    gid = (os.getenv("GUILD_ID") or os.getenv("DISCORD_GUILD_ID") or "").strip()
-    if gid:
-        log.info("GUILD_ID установлен: %s (регистрация slash-команд в конкретный сервер)", gid)
+    guilds = target_guilds()
+    if guilds:
+        guild_ids = ", ".join(str(g.id) for g in guilds)
+        log.info("Guild-режим slash-команд: %s", guild_ids)
     else:
-        log.warning("GUILD_ID не задан — бот попытается регистрировать slash-команды глобально (лимит 100).")
+        log.warning(
+            "GUILD_ID/GUILD_IDS не заданы — бот попытается регистрировать slash-команды глобально (лимит 100)."
+        )
     bot.run(token)
 
 
