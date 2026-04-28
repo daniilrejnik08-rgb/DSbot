@@ -513,59 +513,70 @@ def render_economy_card_png(
     bank: int,
     streak: int = 0,
     title: str = "Экономика",
+    variant: int | None = None,
 ) -> bytes:
-    """Карточка экономики в стиле тёмного неона."""
+    """Карточка экономики в стиле game-card (6 цветовых вариантов)."""
     if not _HAS_PIL:
         raise RuntimeError("Pillow required")
 
     total = int(balance) + int(bank)
-    W, H = 920, 360
-    bg = (13, 15, 21)
-    panel = (27, 31, 42)
-    accent = (104, 178, 255)
-    text_hi = (230, 238, 255)
-    text_mid = (170, 188, 216)
-    text_dim = (122, 138, 164)
+    W, H = 920, 352
+    themes = [
+        {"accent": (45, 124, 255), "panel": (20, 32, 58), "bg": (13, 18, 32)},
+        {"accent": (255, 170, 44), "panel": (59, 36, 16), "bg": (36, 24, 10)},
+        {"accent": (61, 191, 201), "panel": (17, 49, 54), "bg": (10, 30, 33)},
+        {"accent": (147, 77, 255), "panel": (37, 22, 60), "bg": (22, 14, 37)},
+        {"accent": (247, 96, 96), "panel": (61, 24, 24), "bg": (34, 14, 14)},
+        {"accent": (122, 196, 255), "panel": (20, 40, 56), "bg": (12, 24, 33)},
+    ]
+    idx = 0 if variant is None else abs(int(variant)) % len(themes)
+    theme = themes[idx]
+    bg = theme["bg"]
+    panel = theme["panel"]
+    accent = theme["accent"]
+    text_hi = (242, 246, 255)
+    text_mid = (224, 232, 248)
+    text_dim = (180, 194, 220)
 
     img = Image.new("RGB", (W, H), bg)
-    _draw_vignette(img, strength=0.26)
+    _draw_vignette(img, strength=0.22)
     draw = ImageDraw.Draw(img)
-    f_t = _font(24)
-    f_h = _font(36)
-    f_m = _font(20)
-    f_s = _font(15)
+    f_t = _font(22)
+    f_h = _font(38)
+    f_m = _font(18)
+    f_s = _font(14)
 
     pad = 26
     draw.rounded_rectangle((pad, pad, W - pad, H - pad), radius=24, fill=panel, outline=accent, width=2)
-    draw.rounded_rectangle((pad, pad, W - pad, pad + 10), radius=10, fill=_mix(accent, (20, 24, 34), 0.40))
+    draw.rounded_rectangle((pad, pad, W - pad, pad + 11), radius=10, fill=_mix(accent, (20, 24, 34), 0.35))
 
-    draw.text((pad + 22, pad + 18), title, fill=accent, font=f_t)
-    draw.text((pad + 22, pad + 54), member_name[:32], fill=text_mid, font=f_m)
+    draw.text((pad + 22, pad + 18), title[:24], fill=text_hi, font=f_t)
+    draw.text((pad + 22, pad + 50), member_name[:24], fill=text_mid, font=f_m)
 
-    # Центральный блок "всего"
+    # Центральный блок
     total_txt = f"{total:,} 🪙"
     tb = draw.textbbox((0, 0), total_txt, font=f_h)
     tw = tb[2] - tb[0]
-    draw.text(((W - tw) // 2, 112), total_txt, fill=text_hi, font=f_h)
-    cap = "Всего монет"
+    draw.text(((W - tw) // 2, 108), total_txt, fill=text_hi, font=f_h)
+    cap = "TOTAL"
     cb = draw.textbbox((0, 0), cap, font=f_s)
-    draw.text(((W - (cb[2] - cb[0])) // 2, 158), cap, fill=text_dim, font=f_s)
+    draw.text(((W - (cb[2] - cb[0])) // 2, 152), cap, fill=text_dim, font=f_s)
 
-    # Нижние инфо-блоки
-    y0 = H - pad - 92
+    # Нижние инфо-блоки (минимум текста)
+    y0 = H - pad - 88
     box_w = (W - pad * 2 - 24) // 3
     labels = [
-        ("Наличные", f"{int(balance):,} 🪙"),
-        ("Банк", f"{int(bank):,} 🪙"),
-        ("Стрик daily", f"{int(streak)} дн."),
+        ("CASH", f"{int(balance):,}"),
+        ("BANK", f"{int(bank):,}"),
+        ("STREAK", f"{int(streak)}"),
     ]
     for i, (lbl, val) in enumerate(labels):
         x0 = pad + i * (box_w + 12)
         x1 = x0 + box_w
-        y1 = y0 + 70
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=14, outline=(72, 84, 108), width=1, fill=(22, 26, 35))
+        y1 = y0 + 64
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=14, outline=_mix(accent, (90, 100, 120), 0.55), width=1, fill=(22, 26, 35))
         draw.text((x0 + 14, y0 + 10), lbl, fill=text_dim, font=f_s)
-        draw.text((x0 + 14, y0 + 34), val, fill=text_mid, font=f_m)
+        draw.text((x0 + 14, y0 + 32), val, fill=text_mid, font=f_m)
 
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -583,7 +594,7 @@ def render_list_card_png(
     if not _HAS_PIL:
         raise RuntimeError("Pillow required")
 
-    rows = (lines or [])[:12]
+    rows = (lines or [])[:10]
     W, H = 940, 520
     bg = (12, 14, 20)
     panel = (24, 28, 38)
@@ -595,7 +606,7 @@ def render_list_card_png(
     _draw_vignette(img, strength=0.28)
     draw = ImageDraw.Draw(img)
     f_t = _font(26)
-    f_s = _font(16)
+    f_s = _font(14)
     f_r = _font(18)
 
     pad = 24
@@ -606,7 +617,7 @@ def render_list_card_png(
         draw.text((pad + 20, pad + 56), subtitle[:90], fill=text_mid, font=f_s)
 
     y = pad + 94
-    row_h = 30
+    row_h = 34
     if not rows:
         draw.text((pad + 20, y), "Пока пусто.", fill=text_dim, font=f_r)
     else:

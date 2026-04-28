@@ -65,11 +65,11 @@ class Economy(commands.Cog):
             bank=int(data.get("bank", 0)),
             streak=int(data.get("daily_streak", 0)),
             title="Экономика",
+            variant=member.id,
         )
         file = discord.File(io.BytesIO(png), filename="economy.png")
         emb = discord.Embed(title=f"💰 Баланс {member.display_name}", color=GOLD)
         emb.set_image(url="attachment://economy.png")
-        emb.set_footer(text="Профиль и журнал: /profile")
         await interaction.response.send_message(embed=emb, file=file, ephemeral=ephemeral)
 
     async def _send_result_card(
@@ -91,7 +91,7 @@ class Economy(commands.Cog):
             title=title,
             headline=headline,
             detail=detail,
-            footer=footer,
+            footer="",
             accent_rgb=accent_rgb,
         )
         file = discord.File(io.BytesIO(png), filename="eco_result.png")
@@ -115,7 +115,7 @@ class Economy(commands.Cog):
         png = await asyncio.to_thread(
             render_list_card_png,
             title=title,
-            subtitle=subtitle,
+            subtitle="",
             lines=lines,
             accent_rgb=accent_rgb,
         )
@@ -531,21 +531,11 @@ class Economy(commands.Cog):
         emb = discord.Embed(
             title="💎 Экономика и аркада",
             description=(
-                f"**{interaction.user.display_name}** · всего **{total:,}** 🪙\n"
-                f"Наличные **{int(data.get('balance', 0)):,}** · банк **{int(data.get('bank', 0)):,}**\n\n"
-                "Ниже — быстрые кнопки. Полные команды в `/help`."
+                f"**{interaction.user.display_name}**\n"
+                f"Всего: **{total:,}** 🪙"
             ),
             color=GOLD,
         )
-        emb.add_field(
-            name="🎮 Мини-игры на монеты",
-            value=(
-                "`/coinflip` `/dice` `/slots` `/blackjack` `/roulette` `/guess` `/rps` "
-                "`/wheel` `/crash` `/highlow` `/trivia` `/plinko` `/mines`"
-            ),
-            inline=False,
-        )
-        emb.set_footer(text="Журнал операций: /profile → «Движение монет»")
         if has_pillow():
             png = await asyncio.to_thread(
                 render_economy_card_png,
@@ -554,6 +544,7 @@ class Economy(commands.Cog):
                 bank=int(data.get("bank", 0)),
                 streak=int(data.get("daily_streak", 0)),
                 title="Экономика и аркада",
+                variant=interaction.user.id + interaction.guild.id,
             )
             file = discord.File(io.BytesIO(png), filename="economy_hub.png")
             emb.set_image(url="attachment://economy_hub.png")
