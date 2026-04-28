@@ -202,6 +202,7 @@ class ProBot(commands.Bot):
                     log.exception("Ошибка загрузки %s: %s", filename, e)
                 except Exception as e:
                     log.exception("Ошибка загрузки %s: %s", filename, e)
+        print(f"[setup] cogs scanned={len(files)}")
 
         disabled_cmds = _disabled_app_commands()
         if disabled_cmds:
@@ -221,19 +222,24 @@ class ProBot(commands.Bot):
         try:
             synced = await self.tree.sync()
             log.info("Глобальная синхронизация: %s команд", len(synced))
+            print(f"[sync][global] commands={len(synced)}")
         except Exception:
             log.exception("Глобальная синхронизация слеш-команд не удалась")
+            print("[sync][global] failed")
 
     async def on_ready(self):
         log.info("Бот запущен: %s | серверов=%s | пользователей=%s", getattr(self.user, "name", "?"), len(self.guilds), len(self.users))
+        print(f"[ready] user={getattr(self.user, 'name', '?')} guilds={len(self.guilds)}")
 
         # Быстрая синхронизация слешей по серверам (обычно появляется сразу).
         for g in list(self.guilds):
             try:
                 synced = await self.tree.sync(guild=discord.Object(id=g.id))
                 log.info("Guild sync: %s (%s) — %s команд", g.name, g.id, len(synced))
+                print(f"[sync][guild] id={g.id} name={g.name} commands={len(synced)}")
             except Exception:
                 log.exception("Guild sync failed: %s (%s)", g.name, g.id)
+                print(f"[sync][guild] failed id={g.id} name={g.name}")
 
         await self.change_presence(
             activity=discord.Activity(
@@ -339,10 +345,12 @@ def run_bot() -> None:
     if guilds:
         guild_ids = ", ".join(str(g.id) for g in guilds)
         log.info("Guild-режим slash-команд: %s", guild_ids)
+        print(f"[config] guild_mode={guild_ids}")
     else:
         log.warning(
             "GUILD_ID/GUILD_IDS не заданы — бот попытается регистрировать slash-команды глобально (лимит 100)."
         )
+        print("[config] guild_mode=global")
     bot.run(token)
 
 
