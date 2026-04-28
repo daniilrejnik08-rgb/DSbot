@@ -514,6 +514,8 @@ def render_economy_card_png(
     streak: int = 0,
     title: str = "Экономика",
     variant: int | None = None,
+    theme_name: str | None = None,
+    badge_number: int | None = None,
 ) -> bytes:
     """Карточка экономики в стиле game-card (6 цветовых вариантов)."""
     if not _HAS_PIL:
@@ -521,16 +523,21 @@ def render_economy_card_png(
 
     total = int(balance) + int(bank)
     W, H = 920, 352
-    themes = [
-        {"accent": (45, 124, 255), "panel": (20, 32, 58), "bg": (13, 18, 32)},
-        {"accent": (255, 170, 44), "panel": (59, 36, 16), "bg": (36, 24, 10)},
-        {"accent": (61, 191, 201), "panel": (17, 49, 54), "bg": (10, 30, 33)},
-        {"accent": (147, 77, 255), "panel": (37, 22, 60), "bg": (22, 14, 37)},
-        {"accent": (247, 96, 96), "panel": (61, 24, 24), "bg": (34, 14, 14)},
-        {"accent": (122, 196, 255), "panel": (20, 40, 56), "bg": (12, 24, 33)},
-    ]
-    idx = 0 if variant is None else abs(int(variant)) % len(themes)
-    theme = themes[idx]
+    themes = {
+        "blue": {"accent": (45, 124, 255), "panel": (20, 32, 58), "bg": (13, 18, 32)},
+        "orange": {"accent": (255, 170, 44), "panel": (59, 36, 16), "bg": (36, 24, 10)},
+        "cyan": {"accent": (61, 191, 201), "panel": (17, 49, 54), "bg": (10, 30, 33)},
+        "purple": {"accent": (147, 77, 255), "panel": (37, 22, 60), "bg": (22, 14, 37)},
+        "red": {"accent": (247, 96, 96), "panel": (61, 24, 24), "bg": (34, 14, 14)},
+        "light": {"accent": (122, 196, 255), "panel": (20, 40, 56), "bg": (12, 24, 33)},
+    }
+    order = ["blue", "orange", "cyan", "purple", "red", "light"]
+    if theme_name and theme_name in themes:
+        key = theme_name
+    else:
+        idx = 0 if variant is None else abs(int(variant)) % len(order)
+        key = order[idx]
+    theme = themes[key]
     bg = theme["bg"]
     panel = theme["panel"]
     accent = theme["accent"]
@@ -549,6 +556,16 @@ def render_economy_card_png(
     pad = 26
     draw.rounded_rectangle((pad, pad, W - pad, H - pad), radius=24, fill=panel, outline=accent, width=2)
     draw.rounded_rectangle((pad, pad, W - pad, pad + 11), radius=10, fill=_mix(accent, (20, 24, 34), 0.35))
+
+    # Рамка в стиле player-card: верхний бейдж + номер
+    badge_r = 18
+    bx = W // 2
+    by = pad - 2
+    draw.ellipse((bx - badge_r, by - badge_r, bx + badge_r, by + badge_r), fill=_mix(accent, (255, 255, 255), 0.15), outline=text_hi, width=2)
+    num = 7 if badge_number is None else max(0, int(badge_number) % 100)
+    badge_txt = f"{num:02d}"
+    btb = draw.textbbox((0, 0), badge_txt, font=f_s)
+    draw.text((bx - (btb[2] - btb[0]) // 2, by - (btb[3] - btb[1]) // 2), badge_txt, fill=text_hi, font=f_s)
 
     draw.text((pad + 22, pad + 18), title[:24], fill=text_hi, font=f_t)
     draw.text((pad + 22, pad + 50), member_name[:24], fill=text_mid, font=f_m)

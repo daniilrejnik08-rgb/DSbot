@@ -41,6 +41,17 @@ class Economy(commands.Cog):
             "VIP-карта": 5000,
         }
         self._abuse_freeze_until: dict[int, float] = {}
+        self.card_types = ("blue", "orange", "cyan", "purple", "red", "light")
+
+    def _user_card_type(self, guild_id: int, user_id: int) -> str:
+        d = self.get_user_data(guild_id, user_id)
+        t = str(d.get("eco_card_type", "blue")).strip().lower()
+        return t if t in self.card_types else "blue"
+
+    def _set_user_card_type(self, guild_id: int, user_id: int, card_type: str) -> None:
+        d = self.get_user_data(guild_id, user_id)
+        d["eco_card_type"] = card_type
+        self.save_user_data(guild_id, user_id, d)
 
     async def _send_economy_card(
         self,
@@ -66,6 +77,8 @@ class Economy(commands.Cog):
             streak=int(data.get("daily_streak", 0)),
             title="Экономика",
             variant=member.id,
+            theme_name=self._user_card_type(interaction.guild.id, member.id),
+            badge_number=(member.id % 99) + 1,
         )
         file = discord.File(io.BytesIO(png), filename="economy.png")
         emb = discord.Embed(title=f"💰 Баланс {member.display_name}", color=GOLD)
@@ -545,6 +558,8 @@ class Economy(commands.Cog):
                 streak=int(data.get("daily_streak", 0)),
                 title="Экономика и аркада",
                 variant=interaction.user.id + interaction.guild.id,
+            theme_name=self._user_card_type(interaction.guild.id, interaction.user.id),
+            badge_number=(interaction.user.id % 99) + 1,
             )
             file = discord.File(io.BytesIO(png), filename="economy_hub.png")
             emb.set_image(url="attachment://economy_hub.png")
@@ -560,6 +575,29 @@ class Economy(commands.Cog):
             color=GOLD,
         )
         await interaction.response.send_message(embed=emb, view=EconomySelectView(self), ephemeral=True)
+
+    @app_commands.command(name="eco_card_type", description="Выбрать тип карточки экономики")
+    @app_commands.describe(card_type="Тип: blue/orange/cyan/purple/red/light")
+    @app_commands.choices(
+        card_type=[
+            app_commands.Choice(name="Blue", value="blue"),
+            app_commands.Choice(name="Orange", value="orange"),
+            app_commands.Choice(name="Cyan", value="cyan"),
+            app_commands.Choice(name="Purple", value="purple"),
+            app_commands.Choice(name="Red", value="red"),
+            app_commands.Choice(name="Light", value="light"),
+        ]
+    )
+    async def eco_card_type(self, interaction: discord.Interaction, card_type: str):
+        t = card_type.strip().lower()
+        if t not in self.card_types:
+            await interaction.response.send_message(
+                "❌ Неверный тип. Доступно: blue, orange, cyan, purple, red, light.",
+                ephemeral=True,
+            )
+            return
+        self._set_user_card_type(interaction.guild.id, interaction.user.id, t)
+        await interaction.response.send_message(f"✅ Тип карточки сохранён: **{t}**", ephemeral=True)
 
 
 class EconomyHubView(discord.ui.View):
