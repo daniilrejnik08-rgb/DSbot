@@ -30,13 +30,14 @@ def target_guilds() -> list[discord.Object] | None:
     - GUILD_IDS / DISCORD_GUILD_IDS (несколько id через запятую)
     - GUILD_ID / DISCORD_GUILD_ID (один id)
     """
-    raw = (
-        os.getenv("GUILD_IDS")
-        or os.getenv("DISCORD_GUILD_IDS")
-        or os.getenv("GUILD_ID")
-        or os.getenv("DISCORD_GUILD_ID")
-        or DEFAULT_GUILD_IDS
-    ).strip()
+    parts: list[str] = []
+    for key in ("GUILD_IDS", "DISCORD_GUILD_IDS", "GUILD_ID", "DISCORD_GUILD_ID"):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            parts.append(val)
+    raw = ",".join(parts).strip()
+    if not raw:
+        raw = DEFAULT_GUILD_IDS
     if not raw:
         return None
     ids = _parse_guild_ids(raw)
