@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import random
 import time
 from datetime import datetime, timedelta
@@ -12,9 +13,11 @@ from utils import JSONHandler, Wallet
 from utils.ui_render import (
     has_pillow,
     render_arcade_result_png,
+    render_bank_operation_png,
     render_daily_rewards_png,
     render_economy_card_png,
     render_list_card_png,
+    render_risk_profile_png,
 )
 
 # Монеты за день 1…7 (лестница); «конфеты» на картинке — отдельно, в ui_render.DAILY_VISUAL_CANDIES
@@ -42,6 +45,26 @@ class Economy(commands.Cog):
         }
         self._abuse_freeze_until: dict[int, float] = {}
         self.card_types = ("blue", "orange", "cyan", "purple", "red", "light")
+
+    def _find_vip_role(self, guild: discord.Guild) -> discord.Role | None:
+        role_id_raw = str(guild.id)
+        try:
+            role_id_val = int((os.getenv(f"VIP_CARD_ROLE_ID_{role_id_raw}") or "").strip() or "0")
+        except ValueError:
+            role_id_val = 0
+        if role_id_val > 0:
+            role = guild.get_role(role_id_val)
+            if role:
+                return role
+        try:
+            default_role_id = int((os.getenv("VIP_CARD_ROLE_ID") or "").strip() or "0")
+        except ValueError:
+            default_role_id = 0
+        if default_role_id > 0:
+            role = guild.get_role(default_role_id)
+            if role:
+                return role
+        return discord.utils.get(guild.roles, name="VIP")
 
     def _user_card_type(self, guild_id: int, user_id: int) -> str:
         d = self.get_user_data(guild_id, user_id)
@@ -97,20 +120,26 @@ class Economy(commands.Cog):
         accent_rgb: tuple[int, int, int] = (120, 180, 255),
     ) -> None:
         if not has_pillow():
-            await interaction.response.send_message(fallback_text)
+            if interaction.response.is_done():
+                await interaction.followup.send(fallback_text)
+            else:
+                await interaction.response.send_message(fallback_text)
             return
         png = await asyncio.to_thread(
             render_arcade_result_png,
             title=title,
             headline=headline,
             detail=detail,
-            footer="",
+            footer=footer,
             accent_rgb=accent_rgb,
         )
         file = discord.File(io.BytesIO(png), filename="eco_result.png")
         emb = discord.Embed(color=GOLD)
         emb.set_image(url="attachment://eco_result.png")
-        await interaction.response.send_message(embed=emb, file=file)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=emb, file=file)
+        else:
+            await interaction.response.send_message(embed=emb, file=file)
 
     async def _send_list_card(
         self,
@@ -123,19 +152,92 @@ class Economy(commands.Cog):
         accent_rgb: tuple[int, int, int] = (120, 180, 255),
     ) -> None:
         if not has_pillow():
-            await interaction.response.send_message(embed=fallback_embed)
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=fallback_embed)
+            else:
+                await interaction.response.send_message(embed=fallback_embed)
             return
         png = await asyncio.to_thread(
             render_list_card_png,
             title=title,
-            subtitle="",
+            subtitle=subtitle,
             lines=lines,
             accent_rgb=accent_rgb,
         )
         file = discord.File(io.BytesIO(png), filename="eco_list.png")
         emb = discord.Embed(title=title, color=GOLD)
         emb.set_image(url="attachment://eco_list.png")
-        await interaction.response.send_message(embed=emb, file=file)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=emb, file=file)
+        else:
+            await interaction.response.send_message(embed=emb, file=file)
+
+    async def _send_info_card(
+        self,
+        interaction: discord.Interaction,
+        *,
+        title: str,
+        headline: str,
+        detail: str,
+        footer: str = "",
+        fallback_text: str,
+        accent_rgb: tuple[int, int, int] = (120, 180, 255),
+        ephemeral: bool = True,
+    ) -> None:
+        if not has_pillow():
+            if interaction.response.is_done():
+                await interaction.followup.send(fallback_text, ephemeral=ephemeral)
+            else:
+                await interaction.response.send_message(fallback_text, ephemeral=ephemeral)
+            return
+        png = await asyncio.to_thread(
+            render_arcade_result_png,
+            title=title,
+            headline=headline,
+            detail=detail,
+            footer=footer,
+            accent_rgb=accent_rgb,
+        )
+        file = discord.File(io.BytesIO(png), filename="eco_info.png")
+        emb = discord.Embed(title=title, color=GOLD)
+        emb.set_image(url="attachment://eco_info.png")
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=emb, file=file, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(embed=emb, file=file, ephemeral=ephemeral)
+
+    async def _send_bank_card(
+        self,
+        interaction: discord.Interaction,
+        *,
+        title: str,
+        amount: int,
+        balance: int,
+        bank: int,
+        direction: str,
+        fallback_text: str,
+    ) -> None:
+        if not has_pillow():
+            if interaction.response.is_done():
+                await interaction.followup.send(fallback_text)
+            else:
+                await interaction.response.send_message(fallback_text)
+            return
+        png = await asyncio.to_thread(
+            render_bank_operation_png,
+            title=title,
+            amount=amount,
+            balance=balance,
+            bank=bank,
+            direction=direction,
+        )
+        file = discord.File(io.BytesIO(png), filename="eco_bank.png")
+        emb = discord.Embed(title=title, color=GOLD)
+        emb.set_image(url="attachment://eco_bank.png")
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=emb, file=file)
+        else:
+            await interaction.response.send_message(embed=emb, file=file)
 
     def get_user_data(self, guild_id: int, user_id: int) -> dict:
         return Wallet.get(guild_id, user_id)
@@ -352,14 +454,14 @@ class Economy(commands.Cog):
         data["bank"] += amount
         self.save_user_data(interaction.guild.id, interaction.user.id, data)
         Wallet.log_ledger(interaction.guild.id, interaction.user.id, -amount, "В банк", f"наличные → банк")
-        await self._send_result_card(
+        await self._send_bank_card(
             interaction,
             title="🏦 Пополнение банка",
-            headline=f"+{amount} 🪙 в банк",
-            detail=f"Остаток наличных: {int(data['balance']):,} 🪙",
-            footer="Команда: /deposit",
+            amount=amount,
+            balance=int(data["balance"]),
+            bank=int(data["bank"]),
+            direction="deposit",
             fallback_text=f"🏦 В банк зачислено **{amount}** 🪙",
-            accent_rgb=(120, 180, 255),
         )
 
     @app_commands.command(name="withdraw", description="Снять деньги из банка")
@@ -372,14 +474,14 @@ class Economy(commands.Cog):
         data["balance"] += amount
         self.save_user_data(interaction.guild.id, interaction.user.id, data)
         Wallet.log_ledger(interaction.guild.id, interaction.user.id, amount, "Снятие", "банк → наличные")
-        await self._send_result_card(
+        await self._send_bank_card(
             interaction,
             title="💵 Снятие с банка",
-            headline=f"-{amount} 🪙 из банка",
-            detail=f"Остаток в банке: {int(data['bank']):,} 🪙",
-            footer="Команда: /withdraw",
+            amount=amount,
+            balance=int(data["balance"]),
+            bank=int(data["bank"]),
+            direction="withdraw",
             fallback_text=f"💵 Снято из банка: **{amount}** 🪙",
-            accent_rgb=(255, 210, 120),
         )
 
     @app_commands.command(name="rob", description="Попытаться ограбить пользователя")
@@ -493,13 +595,28 @@ class Economy(commands.Cog):
         inventory.extend([item_name] * amount)
         self.save_user_data(interaction.guild.id, interaction.user.id, data)
         Wallet.log_ledger(interaction.guild.id, interaction.user.id, -total, "Магазин", f"{item_name} x{amount}")
+        granted_role_note = ""
+        if item_name.strip().lower() == "vip-карта":
+            vip_role = self._find_vip_role(interaction.guild)
+            if vip_role:
+                member = interaction.user if isinstance(interaction.user, discord.Member) else interaction.guild.get_member(interaction.user.id)
+                if member and vip_role not in member.roles:
+                    try:
+                        await member.add_roles(vip_role, reason="Покупка VIP-карты")
+                        granted_role_note = f"\n🎭 Выдана роль: {vip_role.mention}"
+                    except discord.Forbidden:
+                        granted_role_note = "\n⚠️ Не удалось выдать VIP-роль (проверьте права бота)."
+                    except discord.HTTPException:
+                        granted_role_note = "\n⚠️ Роль не выдана из-за ошибки Discord API."
+            else:
+                granted_role_note = "\n⚠️ VIP-роль не настроена на сервере."
         await self._send_result_card(
             interaction,
             title="🛒 Покупка",
             headline=f"{item_name} x{amount}",
-            detail=f"Списано: {total:,} 🪙",
+            detail=f"Списано: {total:,} 🪙{granted_role_note}",
             footer="Команда: /buy",
-            fallback_text=f"✅ Куплено: **{item_name} x{amount}** за **{total}** 🪙",
+            fallback_text=f"✅ Куплено: **{item_name} x{amount}** за **{total}** 🪙{granted_role_note}",
             accent_rgb=(120, 220, 170),
         )
 
@@ -509,7 +626,16 @@ class Economy(commands.Cog):
         data = self.get_user_data(interaction.guild.id, member.id)
         inventory = data.get("inventory", [])
         if not inventory:
-            await interaction.response.send_message("🎒 Инвентарь пуст")
+            await self._send_info_card(
+                interaction,
+                title="🎒 Инвентарь",
+                headline="Пусто",
+                detail=f"У {member.display_name} пока нет предметов.",
+                footer="Команда: /inventory",
+                fallback_text="🎒 Инвентарь пуст",
+                accent_rgb=(140, 170, 220),
+                ephemeral=False,
+            )
             return
         counts: dict[str, int] = {}
         for name in inventory:
@@ -532,10 +658,22 @@ class Economy(commands.Cog):
         data = self.get_user_data(interaction.guild.id, member.id)
         risk = data.get("suspicion", 0)
         level = "низкий" if risk < 3 else "средний" if risk < 7 else "высокий"
-        await interaction.response.send_message(
-            f"🧾 Риск-профиль {member.mention}: **{level}** (очки подозрения: {risk})",
-            ephemeral=True,
+        if not has_pillow():
+            await interaction.response.send_message(
+                f"🧾 Риск-профиль {member.mention}: **{level}** (очки подозрения: {risk})",
+                ephemeral=True,
+            )
+            return
+        png = await asyncio.to_thread(
+            render_risk_profile_png,
+            member_name=member.display_name,
+            risk_points=int(risk),
+            level=level,
         )
+        file = discord.File(io.BytesIO(png), filename="eco_risk.png")
+        emb = discord.Embed(title="🧾 Риск-профиль", color=GOLD)
+        emb.set_image(url="attachment://eco_risk.png")
+        await interaction.response.send_message(embed=emb, file=file, ephemeral=True)
 
     @app_commands.command(name="economy_hub", description="Панель экономики и игр (кнопки)")
     async def economy_hub(self, interaction: discord.Interaction):
@@ -569,11 +707,20 @@ class Economy(commands.Cog):
 
     @app_commands.command(name="eco_select", description="Экономика в одном Select-меню")
     async def eco_select(self, interaction: discord.Interaction):
-        emb = discord.Embed(
-            title="💎 Экономика · Select",
-            description="Выберите действие из списка ниже.",
-            color=GOLD,
-        )
+        emb = discord.Embed(title="💎 Экономика · Select", description="Выберите действие из списка ниже.", color=GOLD)
+        if has_pillow():
+            png = await asyncio.to_thread(
+                render_arcade_result_png,
+                title="💎 Экономика",
+                headline="Меню действий",
+                detail="Баланс · daily · банк · магазин · инвентарь",
+                footer="Команда: /eco_select",
+                accent_rgb=(120, 180, 255),
+            )
+            file = discord.File(io.BytesIO(png), filename="eco_select.png")
+            emb.set_image(url="attachment://eco_select.png")
+            await interaction.response.send_message(embed=emb, file=file, view=EconomySelectView(self), ephemeral=True)
+            return
         await interaction.response.send_message(embed=emb, view=EconomySelectView(self), ephemeral=True)
 
     @app_commands.command(name="eco_card_type", description="Выбрать тип карточки экономики")
@@ -591,13 +738,26 @@ class Economy(commands.Cog):
     async def eco_card_type(self, interaction: discord.Interaction, card_type: str):
         t = card_type.strip().lower()
         if t not in self.card_types:
-            await interaction.response.send_message(
-                "❌ Неверный тип. Доступно: blue, orange, cyan, purple, red, light.",
+            await self._send_info_card(
+                interaction,
+                title="🎨 Тема карточки",
+                headline="Неверный тип",
+                detail="Доступно: blue, orange, cyan, purple, red, light",
+                fallback_text="❌ Неверный тип. Доступно: blue, orange, cyan, purple, red, light.",
+                accent_rgb=(235, 90, 110),
                 ephemeral=True,
             )
             return
         self._set_user_card_type(interaction.guild.id, interaction.user.id, t)
-        await interaction.response.send_message(f"✅ Тип карточки сохранён: **{t}**", ephemeral=True)
+        await self._send_info_card(
+            interaction,
+            title="🎨 Тема карточки",
+            headline="Сохранено",
+            detail=f"Выбран стиль: {t}",
+            fallback_text=f"✅ Тип карточки сохранён: **{t}**",
+            accent_rgb=(120, 220, 170),
+            ephemeral=True,
+        )
 
 
 class EconomyHubView(discord.ui.View):
@@ -696,17 +856,22 @@ class EconomySelectView(discord.ui.View):
 
     @discord.ui.button(label="Игры", style=discord.ButtonStyle.success, emoji="🎰", row=1)
     async def games(self, interaction: discord.Interaction, _: discord.ui.Button):
-        emb = discord.Embed(
+        await self.cog._send_info_card(
+            interaction,
             title="🎰 Игры",
-            description=(
-                "Ставка — целое число 🪙 с баланса.\n"
-                "**Быстрые:** `/coinflip` · `/slots` · `/dice`\n"
-                "**Карточные:** `/blackjack` · `/highlow`\n"
-                "**Риск:** `/roulette` · `/crash` · `/mines`"
+            headline="Arcade",
+            detail="Быстрые: /coinflip /slots /dice · Карточные: /blackjack /highlow · Риск: /roulette /crash /mines",
+            footer="Также: /double /treasure /trivia /plinko",
+            fallback_text=(
+                "🎰 Игры\n"
+                "Быстрые: /coinflip /slots /dice\n"
+                "Карточные: /blackjack /highlow\n"
+                "Риск: /roulette /crash /mines\n"
+                "Также: /double /treasure /trivia /plinko"
             ),
-            color=BRAND,
+            accent_rgb=(120, 180, 255),
+            ephemeral=True,
         )
-        await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

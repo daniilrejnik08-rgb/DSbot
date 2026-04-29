@@ -147,11 +147,12 @@ class BlackjackView(discord.ui.View):
 class HighLowView(discord.ui.View):
     """Угадать: следующая карта выше или ниже первой (ранги 2–14)."""
 
-    def __init__(self, player: discord.Member, bet: int, first: int):
+    def __init__(self, player: discord.Member, bet: int, first: int, cog: "Games"):
         super().__init__(timeout=45)
         self.player = player
         self.bet = bet
         self.first = first
+        self.cog = cog
         self.second = random.randint(2, 14)
 
     def _label(self, v: int) -> str:
@@ -664,7 +665,7 @@ class Games(commands.Cog):
             description=f"Первая карта: **{lab}**\nКуда дальше?",
             color=BRAND,
         )
-        view = HighLowView(interaction.user, bet, first)
+        view = HighLowView(interaction.user, bet, first, self)
         await interaction.response.send_message(embed=embed, view=view)
 
     # --- Популярные мини-игры ---
@@ -727,11 +728,9 @@ class Games(commands.Cog):
 
         view = TriviaView()
         for i, label in enumerate(q["opts"]):
-
-            async def make_handler(ix: int):
+            def make_handler(ix: int):
                 async def _h(inter: discord.Interaction) -> None:
                     await view.answer(inter, ix)
-
                 return _h
 
             btn = discord.ui.Button(label=label[:80], style=discord.ButtonStyle.secondary, row=i // 2)
@@ -762,17 +761,31 @@ class Games(commands.Cog):
         slot = abs(x) % 9
         mults = [0.0, 0.4, 0.8, 1.2, 1.8, 2.5, 1.8, 1.2, 0.6]
         m = mults[slot]
-        embed = discord.Embed(title="🪩 Plinko", color=GOLD)
-        embed.add_field(name="Шарик", value="".join(path[:16]) + ("…" if len(path) > 16 else ""), inline=False)
+        path_text = "".join(path[:16]) + ("…" if len(path) > 16 else "")
         if m == 0:
-            embed.description = "Слот **0×** — ставка сгорела."
+            await self._send_arcade_card(
+                interaction,
+                title="🪩 Plinko",
+                headline="Слот 0×",
+                detail=f"Траектория: {path_text}\nСтавка сгорела.",
+                footer=f"Ставка {bet} 🪙",
+                accent_rgb=(235, 90, 110),
+                embed_color=DANGER,
+            )
         else:
             win = int(bet * m)
             Wallet.add_balance(
                 interaction.guild.id, interaction.user.id, win, ledger=("Игры", "plinko")
             )
-            embed.description = f"Множитель **×{m}** → **{win}** 🪙"
-        await interaction.response.send_message(embed=embed)
+            await self._send_arcade_card(
+                interaction,
+                title="🪩 Plinko",
+                headline=f"Множитель ×{m}",
+                detail=f"Траектория: {path_text}\nВыигрыш **+{win}** 🪙",
+                footer=f"Ставка {bet} 🪙",
+                accent_rgb=(255, 210, 120),
+                embed_color=GOLD,
+            )
 
     @app_commands.command(name="mines", description="Мини-сапёр 3×3 — одна мина")
     async def mines(self, interaction: discord.Interaction, bet: int):
@@ -817,8 +830,22 @@ class Games(commands.Cog):
                         color=SUCCESS,
                     )
                 await interaction.response.edit_message(embed=emb, view=self)
+                await self_outer._send_arcade_card(
+                    interaction,
+                    title="💣 Мини-сапёр",
+                    headline="Бум!" if idx == self.bomb_pos else "Удачный ход",
+                    detail=(
+                        "Попали на мину — ставка сгорела."
+                        if idx == self.bomb_pos
+                        else f"Безопасная клетка #{idx + 1} • +{win} 🪙"
+                    ),
+                    footer=f"Ставка {bet} 🪙",
+                    accent_rgb=(235, 90, 110) if idx == self.bomb_pos else (120, 220, 170),
+                    embed_color=DANGER if idx == self.bomb_pos else SUCCESS,
+                )
                 self.stop()
 
+        self_outer = self
         view = MinesView(bomb)
         for idx in range(9):
             b = discord.ui.Button(label=f"{idx + 1}", style=discord.ButtonStyle.primary, row=idx // 3)
@@ -836,6 +863,72 @@ class Games(commands.Cog):
         )
         embed.set_footer(text=f"Ставка {bet} 🪙")
         await interaction.response.send_message(embed=embed, view=view)
+
+    @app_commands.command(name="double", description="Double or Nothing")
+    async def double(self, interaction: discord.Interaction, bet: int):
+        if not self._ensure_bet(interaction, bet):
+            await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
+            return
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
+        if random.random() < 0.47:
+            win = bet * 2
+            Wallet.add_balance(
+                interaction.guild.id, interaction.user.id, win, ledger=("Игры", "double · победа")
+            )
+            await self._send_arcade_card(
+                interaction,
+                title="⚡ Double",
+                headline="Удвоение!",
+                detail=f"Выигрыш **+{win}** 🪙",
+                footer=f"Ставка {bet} 🪙",
+                accent_rgb=(120, 220, 170),
+                embed_color=SUCCESS,
+            )
+            return
+        await self._send_arcade_card(
+            interaction,
+            title="⚡ Double",
+            headline="Не повезло",
+            detail="Ставка сгорела.",
+            footer=f"Ставка {bet} 🪙",
+            accent_rgb=(235, 90, 110),
+            embed_color=DANGER,
+        )
+
+    @app_commands.command(name="treasure", description="Сундук: безопасно или ловушка")
+    async def treasure(self, interaction: discord.Interaction, bet: int):
+        if not self._ensure_bet(interaction, bet):
+            await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
+            return
+        Wallet.remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
+        rolls = [0, 0.6, 1.2, 1.8, 2.6, 3.5]
+        mult = random.choice(rolls)
+        if mult <= 0:
+            await self._send_arcade_card(
+                interaction,
+                title="🧰 Сундук",
+                headline="Ловушка",
+                detail="Пустой сундук. Ставка сгорела.",
+                footer=f"Ставка {bet} 🪙",
+                accent_rgb=(235, 90, 110),
+                embed_color=DANGER,
+            )
+            return
+        win = int(bet * mult)
+        Wallet.add_balance(interaction.guild.id, interaction.user.id, win, ledger=("Игры", "treasure"))
+        await self._send_arcade_card(
+            interaction,
+            title="🧰 Сундук",
+            headline=f"Добыча ×{mult:g}",
+            detail=f"Выигрыш **+{win}** 🪙",
+            footer=f"Ставка {bet} 🪙",
+            accent_rgb=(255, 210, 120),
+            embed_color=GOLD,
+        )
 
 
 class BetModal(discord.ui.Modal, title="Ставка для Select-игр"):
@@ -879,6 +972,11 @@ class GameSelect(discord.ui.Select):
             discord.SelectOption(label="Угадай число (авто-число)", value="guess", emoji="🎯"),
             discord.SelectOption(label="Higher / Lower", value="highlow", emoji="📈"),
             discord.SelectOption(label="Блэкджек", value="blackjack", emoji="🃏"),
+            discord.SelectOption(label="Викторина", value="trivia", emoji="🧠"),
+            discord.SelectOption(label="Plinko", value="plinko", emoji="🪩"),
+            discord.SelectOption(label="Мини-сапёр", value="mines", emoji="💣"),
+            discord.SelectOption(label="Double", value="double", emoji="⚡"),
+            discord.SelectOption(label="Сундук", value="treasure", emoji="🧰"),
         ]
         super().__init__(placeholder="Выберите игру…", min_values=1, max_values=1, options=options)
 
@@ -917,6 +1015,21 @@ class GameSelect(discord.ui.Select):
             return
         if game == "blackjack":
             await self.cog.blackjack.callback(self.cog, interaction, bet)
+            return
+        if game == "trivia":
+            await self.cog.trivia.callback(self.cog, interaction, bet)
+            return
+        if game == "plinko":
+            await self.cog.plinko.callback(self.cog, interaction, bet)
+            return
+        if game == "mines":
+            await self.cog.mines.callback(self.cog, interaction, bet)
+            return
+        if game == "double":
+            await self.cog.double.callback(self.cog, interaction, bet)
+            return
+        if game == "treasure":
+            await self.cog.treasure.callback(self.cog, interaction, bet)
             return
         await interaction.response.send_message("Неизвестная игра.", ephemeral=True)
 

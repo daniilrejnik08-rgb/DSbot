@@ -647,3 +647,110 @@ def render_list_card_png(
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+def render_bank_operation_png(
+    *,
+    title: str,
+    amount: int,
+    balance: int,
+    bank: int,
+    direction: str,  # "deposit" | "withdraw"
+) -> bytes:
+    """Карточка банковской операции с выделением направления перевода."""
+    if not _HAS_PIL:
+        raise RuntimeError("Pillow required")
+
+    W, H = 860, 320
+    bg = (12, 14, 20)
+    panel = (24, 28, 38)
+    accent = (120, 180, 255) if direction == "deposit" else (255, 210, 120)
+    flow = "НАЛИЧНЫЕ → БАНК" if direction == "deposit" else "БАНК → НАЛИЧНЫЕ"
+
+    img = Image.new("RGB", (W, H), bg)
+    _draw_vignette(img, strength=0.28)
+    draw = ImageDraw.Draw(img)
+    f_t = _font(24)
+    f_h = _font(28)
+    f_m = _font(18)
+    f_s = _font(14)
+
+    pad = 24
+    draw.rounded_rectangle((pad, pad, W - pad, H - pad), radius=22, fill=panel, outline=accent, width=2)
+    draw.rounded_rectangle((pad, pad, W - pad, pad + 10), radius=10, fill=_mix(accent, (18, 22, 30), 0.4))
+
+    draw.text((pad + 20, pad + 16), title[:50], fill=accent, font=f_t)
+    amount_line = f"{amount:,} 🪙"
+    ab = draw.textbbox((0, 0), amount_line, font=f_h)
+    draw.text(((W - (ab[2] - ab[0])) // 2, pad + 56), amount_line, fill=(236, 242, 255), font=f_h)
+    fb = draw.textbbox((0, 0), flow, font=f_s)
+    draw.text(((W - (fb[2] - fb[0])) // 2, pad + 96), flow, fill=(152, 170, 196), font=f_s)
+
+    y0 = H - pad - 110
+    box_w = (W - pad * 2 - 16) // 2
+    left = ("CASH", f"{int(balance):,} 🪙")
+    right = ("BANK", f"{int(bank):,} 🪙")
+    for i, (lbl, val) in enumerate((left, right)):
+        x0 = pad + i * (box_w + 16)
+        x1 = x0 + box_w
+        y1 = y0 + 74
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=14, fill=(20, 24, 33), outline=(70, 86, 110), width=1)
+        draw.text((x0 + 14, y0 + 10), lbl, fill=(146, 162, 188), font=f_s)
+        draw.text((x0 + 14, y0 + 34), val, fill=(224, 234, 250), font=f_m)
+
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+def render_risk_profile_png(
+    *,
+    member_name: str,
+    risk_points: int,
+    level: str,
+) -> bytes:
+    """Карточка риск-профиля с индикатором уровня."""
+    if not _HAS_PIL:
+        raise RuntimeError("Pillow required")
+
+    W, H = 860, 280
+    bg = (12, 14, 20)
+    panel = (24, 28, 38)
+    lvl = level.lower()
+    accent = (120, 220, 170) if lvl == "низкий" else (255, 210, 120) if lvl == "средний" else (235, 90, 110)
+
+    img = Image.new("RGB", (W, H), bg)
+    _draw_vignette(img, strength=0.28)
+    draw = ImageDraw.Draw(img)
+    f_t = _font(24)
+    f_h = _font(30)
+    f_m = _font(17)
+    f_s = _font(14)
+
+    pad = 24
+    draw.rounded_rectangle((pad, pad, W - pad, H - pad), radius=22, fill=panel, outline=accent, width=2)
+    draw.rounded_rectangle((pad, pad, W - pad, pad + 10), radius=10, fill=_mix(accent, (18, 22, 30), 0.4))
+    draw.text((pad + 20, pad + 16), "Риск-профиль", fill=accent, font=f_t)
+    draw.text((pad + 20, pad + 50), member_name[:30], fill=(218, 230, 248), font=f_m)
+
+    lev = f"Уровень: {level}"
+    lb = draw.textbbox((0, 0), lev, font=f_h)
+    draw.text(((W - (lb[2] - lb[0])) // 2, pad + 70), lev, fill=(236, 242, 255), font=f_h)
+    pts = f"Очки подозрения: {risk_points}"
+    pb = draw.textbbox((0, 0), pts, font=f_m)
+    draw.text(((W - (pb[2] - pb[0])) // 2, pad + 112), pts, fill=(166, 182, 210), font=f_m)
+
+    # Индикатор 0..15+
+    bar_x0, bar_x1 = pad + 34, W - pad - 34
+    bar_y0, bar_y1 = H - pad - 52, H - pad - 28
+    draw.rounded_rectangle((bar_x0, bar_y0, bar_x1, bar_y1), radius=10, fill=(32, 38, 50), outline=(68, 78, 96), width=1)
+    capped = min(max(int(risk_points), 0), 15)
+    fill_w = int((bar_x1 - bar_x0) * (capped / 15.0))
+    if fill_w > 0:
+        draw.rounded_rectangle((bar_x0, bar_y0, bar_x0 + fill_w, bar_y1), radius=10, fill=accent)
+    draw.text((bar_x0, bar_y0 - 18), "0", fill=(136, 152, 178), font=f_s)
+    draw.text((bar_x1 - 16, bar_y0 - 18), "15+", fill=(136, 152, 178), font=f_s)
+
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
