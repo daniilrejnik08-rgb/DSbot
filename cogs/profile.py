@@ -519,6 +519,28 @@ class Profile(commands.Cog):
         except Exception:
             return None
 
+    async def _fetch_bytes_limited(self, url: str, max_bytes: int) -> bytes | None:
+        if self._http is None:
+            await self.cog_load()
+        assert self._http is not None
+        try:
+            async with self._http.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                cl = resp.headers.get("Content-Length")
+                if cl:
+                    try:
+                        if int(cl) > max_bytes:
+                            return None
+                    except Exception:
+                        pass
+                data = await resp.read()
+                if len(data) > max_bytes:
+                    return None
+                return data
+        except Exception:
+            return None
+
     async def _anime_bg_bytes(self) -> bytes | None:
         if self._bg_cache and random.random() < 0.7:
             return random.choice(self._bg_cache)
@@ -912,18 +934,8 @@ class Profile(commands.Cog):
                 ephemeral=True,
             )
             return
-        p = self.get_profile(interaction.guild.id, interaction.user.id)
-        self._ensure_meta(p)
-        lines = []
-        for item_id, item in items[:40]:
-            mark = "✅" if self._profile_has_bg(p, item_id) else "🛒"
-            lines.append(
-                f"{mark} **{item.get('name', item_id)}** · ID `{item_id}` · "
-                f"{int(item.get('price', 0)):,} 🪙"
-            )
-        if len(items) > 40:
-            lines.append(f"…и ещё {len(items) - 40}")
-        await interaction.response.send_message("Фоны магазина:\n" + "\n".join(lines), ephemeral=True)
+        view = BackgroundShopView(self, interaction.user, interaction.user)
+        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
     @app_commands.command(name="profile_bg_set", description="Выбрать фон профиля по имени (из списка)")
     @app_commands.describe(name="Имя фона (как в /profile_bg_list)")
@@ -974,8 +986,13 @@ class Profile(commands.Cog):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Загружать фоны в магазин может только администратор.", ephemeral=True)
             return
-        if file.size and file.size > 6_500_000:
-            await interaction.response.send_message("❌ Слишком большой файл. Максимум ~6.5MB.", ephemeral=True)
+        guild_limit = int(getattr(interaction.guild, "filesize_limit", 8 * 1024 * 1024) or (8 * 1024 * 1024))
+        if file.size and file.size > guild_limit:
+            await interaction.response.send_message(
+                f"❌ Файл больше лимита Discord для этого сервера ({guild_limit // (1024 * 1024)} MB). "
+                "Используйте `/profile_bg_upload_url`.",
+                ephemeral=True,
+            )
             return
         fname = name or Path(file.filename).stem
         safe = self._sanitize_bg_name(fname)
@@ -1007,6 +1024,58 @@ class Profile(commands.Cog):
         self._save_bg_shop(interaction.guild.id, shop)
         await interaction.followup.send(
             f"✅ Фон добавлен в магазин: **{name}** · `{price:,}` 🪙 · ID `{item_id}`",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="profile_bg_upload_url", description="Загрузить фон в магазин профиля по ссылке (админ)")
+    @app_commands.describe(name="Название фона", price="Цена в монетах", url="Прямая ссылка на GIF/PNG/JPG/WebP")
+    async def profile_bg_upload_url(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        name: str,
+        price: app_commands.Range[int, 1, 500000],
+    ):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Загружать фоны в магазин может только администратор.", ephemeral=True)
+            return
+        raw_url = str(url).strip()
+        if not re.match(r"^https?://", raw_url, re.I):
+            await interaction.response.send_message("❌ Нужна прямая ссылка, начинающаяся с http:// или https://", ephemeral=True)
+            return
+        ext = Path(raw_url.split("?", 1)[0]).suffix.lower()
+        if ext not in {".gif", ".png", ".jpg", ".jpeg", ".webp"}:
+            await interaction.response.send_message("❌ Формат не поддерживается. Нужно GIF/PNG/JPG/WebP.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        max_bytes = 120 * 1024 * 1024
+        data = await self._fetch_bytes_limited(raw_url, max_bytes=max_bytes)
+        if not data:
+            await interaction.followup.send(
+                "❌ Не удалось скачать файл по ссылке (недоступен или больше 120MB).",
+                ephemeral=True,
+            )
+            return
+        fname = name or Path(raw_url).stem
+        safe = self._sanitize_bg_name(fname)
+        out_path = self._bg_dir / f"{safe}{ext}"
+        try:
+            out_path.write_bytes(data)
+        except Exception:
+            await interaction.followup.send("❌ Не удалось сохранить файл на диске.", ephemeral=True)
+            return
+        item_id = self._next_bg_item_id(interaction.guild.id)
+        shop = self._get_bg_shop(interaction.guild.id)
+        shop[item_id] = {
+            "name": str(name).strip()[:42],
+            "filename": out_path.name,
+            "price": int(price),
+            "uploader_id": interaction.user.id,
+            "enabled": True,
+        }
+        self._save_bg_shop(interaction.guild.id, shop)
+        await interaction.followup.send(
+            f"✅ Фон добавлен по ссылке: **{name}** · `{price:,}` 🪙 · ID `{item_id}`",
             ephemeral=True,
         )
 
