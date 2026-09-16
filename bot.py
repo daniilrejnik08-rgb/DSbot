@@ -140,7 +140,6 @@ class ProBot(commands.Bot):
             "automation",  # авто-настройки
             "webpanel",    # webpanel токены
             "combat",      # боевка
-            "chat_ai",     # ИИ-чат
         }
         enabled_env = os.getenv("ENABLED_COGS", "").strip()
         enabled_set: set[str] | None = None
