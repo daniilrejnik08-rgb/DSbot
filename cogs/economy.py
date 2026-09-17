@@ -317,8 +317,10 @@ class Economy(commands.Cog):
         new_tier = 1 if tier >= 7 else tier + 1
         data["last_daily"] = datetime.now().isoformat()
         data["daily_tier"] = new_tier
+        data["balance"] = int(data.get("balance", 0)) + bonus
+        # ledger через Wallet после save метаданных
         self.save_user_data(gid, uid, data)
-        Wallet.add_balance(gid, uid, bonus, ledger=("Ежедневный бонус", f"/daily · день {tier}"))
+        Wallet.log_ledger(gid, uid, bonus, "Ежедневный бонус", f"/daily · день {tier}")
 
         await interaction.response.defer()
         files: list[discord.File] = []
@@ -363,8 +365,9 @@ class Economy(commands.Cog):
             text = f"💼 Работа: **{job}**\nВы получили **{salary}** 🪙"
 
         data["last_work"] = datetime.now().isoformat()
+        data["balance"] = int(data.get("balance", 0)) + salary
         self.save_user_data(interaction.guild.id, interaction.user.id, data)
-        Wallet.add_balance(interaction.guild.id, interaction.user.id, salary, ledger=("Работа", job))
+        Wallet.log_ledger(interaction.guild.id, interaction.user.id, salary, "Работа", job)
         await self._send_result_card(
             interaction,
             title="💼 Работа",
@@ -395,35 +398,35 @@ class Economy(commands.Cog):
             await interaction.response.send_message("❌ Недостаточно средств", ephemeral=True)
             return
 
-        receiver = self.get_user_data(interaction.guild.id, member.id)
         tax = max(1, amount * 3 // 100)
-        transfer = amount - tax
-        sender["balance"] -= amount
-        receiver["balance"] += transfer
+        net = amount - tax
+        # Списываем с отправителя атомарно; зачисляем получателю net (налог сгорает)
+        ok, _ = Wallet.try_remove_balance(
+            interaction.guild.id,
+            interaction.user.id,
+            amount,
+            ledger=("Перевод", f"→ {member.display_name}, налог {tax} 🪙"),
+        )
+        if not ok:
+            await interaction.response.send_message("❌ Недостаточно средств", ephemeral=True)
+            return
+        Wallet.add_balance(
+            interaction.guild.id,
+            member.id,
+            net,
+            ledger=("Перевод", f"← {interaction.user.display_name}"),
+        )
+        # suspicion / anti-abuse
+        sender = self.get_user_data(interaction.guild.id, interaction.user.id)
         if amount >= 50000:
             sender["suspicion"] = sender.get("suspicion", 0) + 1
         if amount >= 150000:
             sender["suspicion"] = sender.get("suspicion", 0) + 2
         if member.bot:
             sender["suspicion"] = sender.get("suspicion", 0) + 3
+        self.save_user_data(interaction.guild.id, interaction.user.id, sender)
         history.append(now)
         self.pay_limits[interaction.user.id] = history
-        self.save_user_data(interaction.guild.id, interaction.user.id, sender)
-        self.save_user_data(interaction.guild.id, member.id, receiver)
-        Wallet.log_ledger(
-            interaction.guild.id,
-            interaction.user.id,
-            -amount,
-            "Перевод",
-            f"→ {member.display_name}, налог {tax} 🪙",
-        )
-        Wallet.log_ledger(
-            interaction.guild.id,
-            member.id,
-            transfer,
-            "Перевод",
-            f"← {interaction.user.display_name}",
-        )
         self.audit.set(
             f"{interaction.guild.id}.pay.{now}",
             {
@@ -431,29 +434,28 @@ class Economy(commands.Cog):
                 "to": member.id,
                 "amount": amount,
                 "tax": tax,
-                "net": transfer,
+                "net": net,
             },
         )
         await self._send_result_card(
             interaction,
             title="💸 Перевод",
-            headline=f"{member.display_name} +{transfer} 🪙",
+            headline=f"{member.display_name} +{net} 🪙",
             detail=f"Сумма: {amount} · Налог: {tax}",
             footer="Команда: /pay",
-            fallback_text=f"💸 Перевод выполнен: {member.mention} получил **{transfer}** 🪙 (налог {tax} 🪙)",
+            fallback_text=f"💸 Перевод выполнен: {member.mention} получил **{net}** 🪙 (налог {tax} 🪙)",
             accent_rgb=(120, 180, 255),
         )
 
     @app_commands.command(name="deposit", description="Положить деньги в банк")
     async def deposit(self, interaction: discord.Interaction, amount: int):
-        data = self.get_user_data(interaction.guild.id, interaction.user.id)
-        if amount <= 0 or data["balance"] < amount:
+        if amount <= 0:
+            await interaction.response.send_message("❌ Некорректная сумма", ephemeral=True)
+            return
+        ok, data = Wallet.deposit_bank(interaction.guild.id, interaction.user.id, amount)
+        if not ok:
             await interaction.response.send_message("❌ Недостаточно наличных", ephemeral=True)
             return
-        data["balance"] -= amount
-        data["bank"] += amount
-        self.save_user_data(interaction.guild.id, interaction.user.id, data)
-        Wallet.log_ledger(interaction.guild.id, interaction.user.id, -amount, "В банк", f"наличные → банк")
         await self._send_bank_card(
             interaction,
             title="🏦 Пополнение банка",
@@ -466,14 +468,13 @@ class Economy(commands.Cog):
 
     @app_commands.command(name="withdraw", description="Снять деньги из банка")
     async def withdraw(self, interaction: discord.Interaction, amount: int):
-        data = self.get_user_data(interaction.guild.id, interaction.user.id)
-        if amount <= 0 or data["bank"] < amount:
+        if amount <= 0:
+            await interaction.response.send_message("❌ Некорректная сумма", ephemeral=True)
+            return
+        ok, data = Wallet.withdraw_bank(interaction.guild.id, interaction.user.id, amount)
+        if not ok:
             await interaction.response.send_message("❌ Недостаточно средств на счете", ephemeral=True)
             return
-        data["bank"] -= amount
-        data["balance"] += amount
-        self.save_user_data(interaction.guild.id, interaction.user.id, data)
-        Wallet.log_ledger(interaction.guild.id, interaction.user.id, amount, "Снятие", "банк → наличные")
         await self._send_bank_card(
             interaction,
             title="💵 Снятие с банка",
@@ -506,14 +507,16 @@ class Economy(commands.Cog):
             await interaction.response.send_message("❌ У цели слишком мало наличных", ephemeral=True)
             return
         self.cooldowns[interaction.user.id] = now
+        gid = interaction.guild.id
         if random.random() < 0.45:
-            stolen = min(random.randint(120, 450), victim["balance"])
-            victim["balance"] -= stolen
-            robber["balance"] += stolen
-            self.save_user_data(interaction.guild.id, member.id, victim)
-            self.save_user_data(interaction.guild.id, interaction.user.id, robber)
-            Wallet.log_ledger(interaction.guild.id, interaction.user.id, stolen, "Ограбление", f"у {member.display_name}")
-            Wallet.log_ledger(interaction.guild.id, member.id, -stolen, "Ограбление", f"вор: {interaction.user.display_name}")
+            stolen = min(random.randint(120, 450), int(victim["balance"]))
+            ok, _ = Wallet.try_remove_balance(
+                gid, member.id, stolen, ledger=("Ограбление", f"вор: {interaction.user.display_name}")
+            )
+            if not ok:
+                await interaction.response.send_message("❌ У цели уже нет наличных", ephemeral=True)
+                return
+            Wallet.add_balance(gid, interaction.user.id, stolen, ledger=("Ограбление", f"у {member.display_name}"))
             await self._send_result_card(
                 interaction,
                 title="🕶️ Ограбление",
@@ -524,10 +527,11 @@ class Economy(commands.Cog):
                 accent_rgb=(120, 220, 170),
             )
         else:
-            fine = min(random.randint(180, 520), robber["balance"])
-            robber["balance"] -= fine
-            self.save_user_data(interaction.guild.id, interaction.user.id, robber)
-            Wallet.log_ledger(interaction.guild.id, interaction.user.id, -fine, "Ограбление провал", "штраф")
+            fine = min(random.randint(180, 520), int(robber["balance"]))
+            if fine > 0:
+                Wallet.remove_balance(
+                    gid, interaction.user.id, fine, ledger=("Ограбление провал", "штраф")
+                )
             await self._send_result_card(
                 interaction,
                 title="🚔 Ограбление",
@@ -586,15 +590,21 @@ class Economy(commands.Cog):
             await interaction.response.send_message("❌ Такого предмета нет в магазине", ephemeral=True)
             return
         total = self.shop_items[item_name] * amount
-        data = self.get_user_data(interaction.guild.id, interaction.user.id)
-        if data["balance"] < total:
+        ok, data = Wallet.try_remove_balance(
+            interaction.guild.id,
+            interaction.user.id,
+            total,
+            ledger=("Магазин", f"{item_name} x{amount}"),
+        )
+        if not ok:
             await interaction.response.send_message("❌ Недостаточно средств", ephemeral=True)
             return
-        data["balance"] -= total
         inventory = data.setdefault("inventory", [])
+        if not isinstance(inventory, list):
+            inventory = []
+            data["inventory"] = inventory
         inventory.extend([item_name] * amount)
         self.save_user_data(interaction.guild.id, interaction.user.id, data)
-        Wallet.log_ledger(interaction.guild.id, interaction.user.id, -total, "Магазин", f"{item_name} x{amount}")
         granted_role_note = ""
         if item_name.strip().lower() == "vip-карта":
             vip_role = self._find_vip_role(interaction.guild)

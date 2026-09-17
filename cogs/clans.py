@@ -352,16 +352,18 @@ class Clans(commands.Cog):
         if not clan:
             await interaction.response.send_message("❌ Вы не в клане", ephemeral=True)
             return
-        eco = Wallet.get(interaction.guild.id, interaction.user.id)
-        if eco["balance"] < amount:
+        ok, _ = Wallet.try_remove_balance(
+            interaction.guild.id,
+            interaction.user.id,
+            amount,
+            ledger=("Клан", f"в банк {clan['name']}"),
+        )
+        if not ok:
             await interaction.response.send_message("❌ Недостаточно средств", ephemeral=True)
             return
-        eco["balance"] -= amount
         clan["bank"] += amount
         clan["points"] += amount // 20
         clan["quest_progress"] += 1
-        Wallet.save(interaction.guild.id, interaction.user.id, eco)
-        Wallet.log_ledger(interaction.guild.id, interaction.user.id, -amount, "Клан", f"в банк {clan['name']}")
         clans = self.get_clans(interaction.guild.id)
         clans[clan_id] = clan
         self.save_clans(interaction.guild.id, clans)

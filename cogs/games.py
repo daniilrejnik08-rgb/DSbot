@@ -226,10 +226,20 @@ class Games(commands.Cog):
         self.bot = bot
 
     def _ensure_bet(self, interaction: discord.Interaction, bet: int) -> bool:
+        """Проверка ставки (без списания). Для списания — _take_bet."""
         if bet <= 0:
             return False
         data = Wallet.get(interaction.guild.id, interaction.user.id)
-        return data["balance"] >= bet
+        return int(data["balance"]) >= bet
+
+    def _take_bet(self, interaction: discord.Interaction, bet: int) -> bool:
+        """Атомарно списать ставку. False = не хватило монет или bet <= 0."""
+        if bet <= 0:
+            return False
+        ok, _ = Wallet.try_remove_balance(
+            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
+        )
+        return ok
 
     async def _send_arcade_card(
         self,
@@ -287,12 +297,9 @@ class Games(commands.Cog):
         ]
     )
     async def coinflip(self, interaction: discord.Interaction, bet: int, choice: str):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет или неверная ставка.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         result = random.choice(["heads", "tails"])
         win = choice == result
         side_ru = "орёл" if result == "heads" else "решка"
@@ -317,12 +324,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="dice", description="Угадать число на кубике 1–6")
     async def dice(self, interaction: discord.Interaction, bet: int, number: app_commands.Range[int, 1, 6]):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         result = random.randint(1, 6)
         if result == number:
             win = bet * 6
@@ -348,12 +352,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="slots", description="Слоты — три в ряд")
     async def slots(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         emojis = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣"]
         result = [random.choice(emojis) for _ in range(3)]
         if result[0] == result[1] == result[2]:
@@ -406,12 +407,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="blackjack", description="Блэкджек против дилера")
     async def blackjack(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         view = BlackjackView(interaction.user, bet, self)
         embed = discord.Embed(
             title="🃏 Блэкджек",
@@ -423,12 +421,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="roulette", description="Риск: 1 из 6 — проигрыш")
     async def roulette(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         if random.randint(1, 6) == 1:
             await self._send_arcade_card(
                 interaction,
@@ -456,12 +451,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="guess", description="Угадать число от 1 до 10")
     async def guess(self, interaction: discord.Interaction, bet: int, number: app_commands.Range[int, 1, 10]):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         secret = random.randint(1, 10)
         if number == secret:
             win = bet * 9
@@ -497,12 +489,9 @@ class Games(commands.Cog):
         ]
     )
     async def rps(self, interaction: discord.Interaction, bet: int, pick: str):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         bot_pick = random.choice(["rock", "scissors", "paper"])
         names = {"rock": "Камень", "scissors": "Ножницы", "paper": "Бумага"}
         beats = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
@@ -545,12 +534,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="wheel", description="Колесо фортуны")
     async def wheel(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         sectors = [0, 0.5, 1, 1.5, 2, 2.5, 3, 0.5]
         mult = random.choice(sectors)
         if mult == 0:
@@ -580,12 +566,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="crash", description="Краш: успейте до обрыва множителя")
     async def crash(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         crash_at = round(random.uniform(1.15, 6.5), 2)
         cashout = round(random.uniform(0.8, 7.0), 2)
         if cashout < crash_at:
@@ -651,12 +634,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="highlow", description="Следующая карта выше или ниже?")
     async def highlow(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         first = random.randint(2, 14)
         labels = {14: "Туз", 11: "Валет", 12: "Дама", 13: "Король"}
         lab = labels.get(first, str(first))
@@ -687,12 +667,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="trivia", description="Викторина на монеты")
     async def trivia(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         q = random.choice(self.TRIVIA_BANK)
         player_id = interaction.user.id
         gid = interaction.guild.id
@@ -746,12 +723,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="plinko", description="Plinko — шарик и множитель")
     async def plinko(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         x = 0.0
         path = []
         for _ in range(10):
@@ -789,12 +763,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="mines", description="Мини-сапёр 3×3 — одна мина")
     async def mines(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         bomb = random.randint(0, 8)
         uid = interaction.user.id
         gid = interaction.guild.id
@@ -866,12 +837,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="double", description="Double or Nothing")
     async def double(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         if random.random() < 0.47:
             win = bet * 2
             Wallet.add_balance(
@@ -899,12 +867,9 @@ class Games(commands.Cog):
 
     @app_commands.command(name="treasure", description="Сундук: безопасно или ловушка")
     async def treasure(self, interaction: discord.Interaction, bet: int):
-        if not self._ensure_bet(interaction, bet):
+        if not self._take_bet(interaction, bet):
             await interaction.response.send_message("❌ Недостаточно монет.", ephemeral=True)
             return
-        Wallet.remove_balance(
-            interaction.guild.id, interaction.user.id, bet, ledger=("Игры", "ставка")
-        )
         rolls = [0, 0.6, 1.2, 1.8, 2.6, 3.5]
         mult = random.choice(rolls)
         if mult <= 0:

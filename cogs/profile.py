@@ -65,6 +65,8 @@ ANIME_BG_APIS: list[str] = [
 # Анимированный профиль: ~60 FPS (мин. шаг кадра в мс), макс. кадров — баланс CPU / размер / Discord
 PROFILE_GIF_TARGET_FPS = 60
 PROFILE_GIF_MAX_FRAMES = 55
+PROFILE_GIF_HEAVY_BYTES = 16 * 1024 * 1024
+PROFILE_GIF_RENDER_TIMEOUT_SEC = 12
 
 
 def _gif_even_frame_indices(n: int, m: int) -> list[int]:
@@ -326,8 +328,11 @@ class Profile(commands.Cog):
             except Exception:
                 durs.append(100)
 
-        target_ms = max(10, round(1000.0 / float(PROFILE_GIF_TARGET_FPS)))
-        m_out = min(PROFILE_GIF_MAX_FRAMES, n)
+        heavy = len(gif_bg_bytes) >= PROFILE_GIF_HEAVY_BYTES or n > 140
+        target_fps = 30 if heavy else PROFILE_GIF_TARGET_FPS
+        max_frames = 20 if heavy else PROFILE_GIF_MAX_FRAMES
+        target_ms = max(10, round(1000.0 / float(target_fps)))
+        m_out = min(max_frames, n)
         indices = _gif_even_frame_indices(n, m_out)
 
         for j, fi in enumerate(indices):
@@ -345,7 +350,7 @@ class Profile(commands.Cog):
             card_rgb = Image.open(io.BytesIO(png_bytes)).convert("RGB")
             # Сжимаем GIF, чтобы надёжнее проходить лимит вложений Discord.
             card_rgb = card_rgb.resize((900, 383), Image.Resampling.LANCZOS)
-            card = card_rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
+            card = card_rgb.convert("P", palette=Image.Palette.ADAPTIVE, colors=(96 if heavy else 128))
             frames.append(card)
             fi_next = indices[j + 1] if j + 1 < len(indices) else n
             chunk_ms = sum(durs[fi:fi_next])
@@ -852,9 +857,18 @@ class Profile(commands.Cog):
         )
 
         if bg_gif_bytes:
-            gif = await asyncio.to_thread(self._render_profile_gif_sync, *args, gif_bg_bytes=bg_gif_bytes)
-            file = discord.File(io.BytesIO(gif), filename="profile.gif")
-            image_url = None
+            try:
+                gif = await asyncio.wait_for(
+                    asyncio.to_thread(self._render_profile_gif_sync, *args, gif_bg_bytes=bg_gif_bytes),
+                    timeout=PROFILE_GIF_RENDER_TIMEOUT_SEC,
+                )
+                file = discord.File(io.BytesIO(gif), filename="profile.gif")
+                image_url = None
+            except Exception:
+                # Если GIF слишком тяжёлый/долго рендерится — отдаём быстрый PNG.
+                png = await asyncio.to_thread(self._render_card_sync, *args)
+                file = discord.File(io.BytesIO(png), filename="profile.png")
+                image_url = "attachment://profile.png"
         else:
             png = await asyncio.to_thread(self._render_card_sync, *args)
             file = discord.File(io.BytesIO(png), filename="profile.png")

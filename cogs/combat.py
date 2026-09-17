@@ -21,17 +21,19 @@ class Combat(commands.Cog):
         if member.bot or member.id == interaction.user.id or bet <= 0:
             await interaction.response.send_message("❌ Неверные параметры дуэли", ephemeral=True)
             return
-        a = self.eco(interaction.guild.id, interaction.user.id)
-        b = self.eco(interaction.guild.id, member.id)
-        if a["balance"] < bet or b["balance"] < bet:
-            await interaction.response.send_message("❌ У одного из игроков не хватает монет", ephemeral=True)
+        gid = interaction.guild.id
+        # Списываем ставки атомарно у обоих; при нехватке у второго — откат первому
+        ok_a, _ = Wallet.try_remove_balance(gid, interaction.user.id, bet, ledger=("Дуэль", f"ставка vs {member.display_name}"))
+        if not ok_a:
+            await interaction.response.send_message("❌ У вас не хватает монет", ephemeral=True)
+            return
+        ok_b, _ = Wallet.try_remove_balance(gid, member.id, bet, ledger=("Дуэль", f"ставка vs {interaction.user.display_name}"))
+        if not ok_b:
+            Wallet.add_balance(gid, interaction.user.id, bet, ledger=("Дуэль", "возврат ставки"))
+            await interaction.response.send_message("❌ У соперника не хватает монет", ephemeral=True)
             return
         winner = interaction.user if random.random() < 0.5 else member
-        loser = member if winner.id == interaction.user.id else interaction.user
-        self.eco(interaction.guild.id, winner.id)["balance"] += bet
-        self.eco(interaction.guild.id, loser.id)["balance"] -= bet
-        Wallet.save(interaction.guild.id, winner.id, self.eco(interaction.guild.id, winner.id))
-        Wallet.save(interaction.guild.id, loser.id, self.eco(interaction.guild.id, loser.id))
+        Wallet.add_balance(gid, winner.id, bet * 2, ledger=("Дуэль", "победа"))
         await interaction.response.send_message(f"⚔️ Победитель дуэли: {winner.mention}. Выигрыш: **{bet}** 🪙")
 
     @app_commands.command(name="boss_join", description="Ударить серверного босса (кооп)")
@@ -48,9 +50,12 @@ class Combat(commands.Cog):
             rewards = []
             for uid, dealt in state["participants"].items():
                 reward = int(400 + (dealt / total) * 2600)
-                eco = self.eco(interaction.guild.id, int(uid))
-                eco["balance"] += reward
-                Wallet.save(interaction.guild.id, int(uid), eco)
+                Wallet.add_balance(
+                    interaction.guild.id,
+                    int(uid),
+                    reward,
+                    ledger=("Босс", f"награда · dmg {dealt}"),
+                )
                 t = self.tree.get(f"{interaction.guild.id}.{uid}", {})
                 if t:
                     t["xp"] = t.get("xp", 0) + reward // 20
