@@ -216,56 +216,79 @@ class ProBot(commands.Bot):
                     if removed is not None:
                         log.info("Отключена guild slash-команда: /%s (guild=%s)", cmd_name, guild.id)
 
-        # Команды регистрируются глобально в tree.
-        # Мгновенное появление — через copy_global_to + guild sync в on_ready.
-        # Глобальный sync оставляем как fallback (до ~1 часа на появление).
+        # Sync делаем в on_ready (после подключения), один раз.
+        self._synced_once = False
+
+    async def _sync_all(self) -> list[str]:
+        """Скопировать tree на гильдии и засинкать. Возвращает лог-строки."""
+        lines: list[str] = []
         try:
             cmds = list(self.tree.walk_commands())
-            log.info("В tree сейчас %s app-команд(ы) до sync", len(cmds))
-            print(f"[setup] tree_commands={len(cmds)} names={[c.name for c in cmds[:30]]}")
-        except Exception:
-            log.exception("Не удалось перечислить tree commands")
+            names = [c.qualified_name for c in cmds]
+            lines.append(f"tree={len(names)} :: {', '.join(names[:40])}")
+            print(f"[sync] {lines[-1]}")
+        except Exception as e:
+            lines.append(f"walk_error={e}")
 
-        try:
-            synced = await self.tree.sync()
-            log.info("Глобальная синхронизация: %s команд", len(synced))
-            print(f"[sync][global] commands={len(synced)}")
-        except Exception:
-            log.exception("Глобальная синхронизация слеш-команд не удалась")
-            print("[sync][global] failed")
-
-    async def on_ready(self):
-        log.info(
-            "Бот запущен: %s | серверов=%s | пользователей=%s",
-            getattr(self.user, "name", "?"),
-            len(self.guilds),
-            len(self.users),
-        )
-        print(f"[ready] user={getattr(self.user, 'name', '?')} guilds={len(self.guilds)}")
-
-        # Быстрый guild-sync: копируем глобальные команды на каждый сервер.
-        targets = target_guilds()
-        guild_objs = list(targets) if targets else [discord.Object(id=g.id) for g in self.guilds]
-        # плюс все сервера, где бот уже есть
-        seen = {getattr(x, "id", None) for x in guild_objs}
+        # гильдии из env + все, где бот уже сидит
+        targets = target_guilds() or []
+        guild_objs: list[discord.Object] = list(targets)
+        seen = {g.id for g in guild_objs}
         for g in self.guilds:
             if g.id not in seen:
                 guild_objs.append(discord.Object(id=g.id))
+                seen.add(g.id)
+
+        if not guild_objs:
+            # нет гильдий — только global
+            try:
+                synced = await self.tree.sync()
+                lines.append(f"global_sync={len(synced)}")
+                print(f"[sync][global] {len(synced)}")
+            except Exception as e:
+                lines.append(f"global_fail={e}")
+                print(f"[sync][global] fail {e}")
+            return lines
 
         for gobj in guild_objs:
             try:
                 self.tree.copy_global_to(guild=gobj)
                 synced = await self.tree.sync(guild=gobj)
-                log.info("Guild sync id=%s — %s команд", gobj.id, len(synced))
+                lines.append(f"guild={gobj.id} synced={len(synced)}")
                 print(f"[sync][guild] id={gobj.id} commands={len(synced)}")
+            except Exception as e:
+                lines.append(f"guild={gobj.id} fail={e}")
+                print(f"[sync][guild] fail id={gobj.id} {e}")
+
+        # global тоже (фон)
+        try:
+            synced = await self.tree.sync()
+            lines.append(f"global_sync={len(synced)}")
+            print(f"[sync][global] commands={len(synced)}")
+        except Exception as e:
+            lines.append(f"global_fail={e}")
+            print(f"[sync][global] fail {e}")
+        return lines
+
+    async def on_ready(self):
+        log.info(
+            "Бот запущен: %s | серверов=%s",
+            getattr(self.user, "name", "?"),
+            len(self.guilds),
+        )
+        print(f"[ready] user={getattr(self.user, 'name', '?')} guilds={len(self.guilds)}")
+
+        if not getattr(self, "_synced_once", False):
+            self._synced_once = True
+            try:
+                await self._sync_all()
             except Exception:
-                log.exception("Guild sync failed id=%s", getattr(gobj, "id", "?"))
-                print(f"[sync][guild] failed id={getattr(gobj, 'id', '?')}")
+                log.exception("sync_all failed")
 
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name=f"{len(self.guilds)} серверов | /help",
+                name=f"{len(self.guilds)} серверов | /help | !sync",
             )
         )
 
@@ -281,6 +304,34 @@ class ProBot(commands.Bot):
 
 
 bot = ProBot()
+
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def prefix_sync(ctx: commands.Context):
+    """Принудительный sync slash-команд (если / не видно)."""
+    msg = await ctx.send("⏳ Синхронизация slash-команд…")
+    try:
+        lines = await bot._sync_all()
+        text = "\n".join(lines)[:1800]
+        await msg.edit(content=f"✅ Sync готов:\n```\n{text}\n```")
+    except Exception as e:
+        await msg.edit(content=f"❌ Sync error: `{e}`")
+
+
+@bot.command(name="cmds")
+@commands.has_permissions(administrator=True)
+async def prefix_cmds(ctx: commands.Context):
+    """Список команд в tree (диагностика)."""
+    names = sorted({c.qualified_name for c in bot.tree.walk_commands()})
+    cogs = sorted(bot.cogs.keys())
+    chunk = ", ".join(f"/{n}" for n in names[:60])
+    extra = f" … +{len(names)-60}" if len(names) > 60 else ""
+    await ctx.send(
+        f"**Cogs ({len(cogs)}):** {', '.join(cogs)}\n"
+        f"**Slash ({len(names)}):** {chunk}{extra}"
+    )
+
+
 
 
 
