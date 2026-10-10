@@ -342,10 +342,4 @@ class Automation(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    from utils import target_guilds
-
-    guilds = target_guilds()
-    if guilds is None:
-        await bot.add_cog(Automation(bot))
-    else:
-        await bot.add_cog(Automation(bot), guilds=guilds)
+    await bot.add_cog(Automation(bot))
