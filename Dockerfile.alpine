@@ -1,14 +1,26 @@
-# Образ для хостингов на Alpine (нет apt — пакет называется opus, не libopus0).
+# Alpine-вариант (меньше размер). Если slim не стартует — попробуй этот файл как Dockerfile.
 FROM python:3.11-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg opus \
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apk add --no-cache \
+        ffmpeg \
+        opus \
+        opus-dev \
+        gcc \
+        musl-dev \
+        libffi-dev \
     && rm -rf /var/cache/apk/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
 
 COPY . .
+RUN mkdir -p /app/data
 
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]
