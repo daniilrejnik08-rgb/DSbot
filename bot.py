@@ -306,7 +306,7 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='🎤 Голосовые',
-        value='`/voice_setup`, `/voice_toggle`, `/voice_panel`, `/voice_claim`, `/voice_lock`, `/voice_unlock` + панель кнопок',
+        value='`/voice_setup`, `/voice_customize`, `/voice_prefs`, `/voice_panel`, `/voice_claim`, `/voice_repost_panel` + панель',
         inline=False
     )
     embed.add_field(
@@ -316,12 +316,23 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='⚙️ Сервер и сезоны',
-        value='`/season_status`, `/season_roll`, `/battlepass_claim`, `/autorole_set`, `/welcome_set`, `/modlog_set`, `/ticket_setup`, `/webpanel_token`',
+        value='`/season_status`, `/season_roll`, `/battlepass_claim`, `/autorole_set`, `/welcome_set`, `/modlog_set`, `/webpanel_token`',
         inline=False
     )
     embed.add_field(
         name='🎯 Мониторинг CS / Minecraft',
         value='`/servers`, `/server_add`, `/server_remove`, `/server_edit`, `/server_list`, `/servers_panel_setup`, `/servers_refresh`',
+        inline=False
+    )
+    embed.add_field(
+        name='🎉 Розыгрыши · Тикеты · Инвайты · XP · Анкеты',
+        value=(
+            '`/gstart` `/gend` `/greroll` · '
+            '`/ticket_setup` `/ticket_add` `/ticket_close` · '
+            '`/invites` `/invite_leaderboard` `/invite_setup` · '
+            '`/rank` `/levels_top` `/level_setup` · '
+            '`/form_setup` `/form_panel` `/form_questions` `/form_list`'
+        ),
         inline=False
     )
     embed.add_field(
