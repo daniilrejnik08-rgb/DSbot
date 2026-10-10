@@ -306,7 +306,7 @@ async def help_command(interaction: discord.Interaction):
     )
     embed.add_field(
         name='🎤 Голосовые',
-        value='`/voice_setup`, `/voice_toggle` + панель кнопок приватных комнат',
+        value='`/voice_setup`, `/voice_toggle`, `/voice_panel`, `/voice_claim`, `/voice_lock`, `/voice_unlock` + панель кнопок',
         inline=False
     )
     embed.add_field(
