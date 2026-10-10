@@ -4,7 +4,7 @@ import os
 
 import discord
 
-DEFAULT_GUILD_IDS = "573548126506451006,1489984514447900792"
+DEFAULT_GUILD_IDS = ""  # без env — глобальная регистрация (или задайте GUILD_IDS)
 
 
 def _parse_guild_ids(raw: str) -> list[int]:
@@ -37,7 +37,7 @@ def target_guilds() -> list[discord.Object] | None:
             parts.append(val)
     raw = ",".join(parts).strip()
     if not raw:
-        raw = DEFAULT_GUILD_IDS
+        raw = DEFAULT_GUILD_IDS.strip()
     if not raw:
         return None
     ids = _parse_guild_ids(raw)
