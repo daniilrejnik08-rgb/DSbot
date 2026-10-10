@@ -5,7 +5,13 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from openai import OpenAI
+
+try:
+    from openai import OpenAI
+    _HAS_OPENAI = True
+except ImportError:
+    OpenAI = None  # type: ignore
+    _HAS_OPENAI = False
 
 try:
     from utils.theme import BRAND
@@ -19,7 +25,9 @@ class ChatAI(commands.Cog):
         self.client: OpenAI | None = None
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
-    def _get_client(self) -> OpenAI | None:
+    def _get_client(self) -> "OpenAI | None":
+        if not _HAS_OPENAI or OpenAI is None:
+            return None
         if self.client is not None:
             return self.client
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -29,6 +37,8 @@ class ChatAI(commands.Cog):
         return self.client
 
     def _build_reply(self, user_text: str) -> str:
+        if not _HAS_OPENAI:
+            return "❌ Пакет `openai` не установлен. Установите: `pip install openai`."
         client = self._get_client()
         if client is None:
             return "❌ Не задан `OPENAI_API_KEY`. Добавьте переменную окружения и перезапустите бота."
