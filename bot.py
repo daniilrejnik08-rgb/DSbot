@@ -216,8 +216,16 @@ class ProBot(commands.Bot):
                     if removed is not None:
                         log.info("Отключена guild slash-команда: /%s (guild=%s)", cmd_name, guild.id)
 
-        # Глобальная синхронизация может появляться до ~1 часа.
-        # Поэтому дополнительно синкаем по гильдиям в on_ready (быстро).
+        # Команды регистрируются глобально в tree.
+        # Мгновенное появление — через copy_global_to + guild sync в on_ready.
+        # Глобальный sync оставляем как fallback (до ~1 часа на появление).
+        try:
+            cmds = list(self.tree.walk_commands())
+            log.info("В tree сейчас %s app-команд(ы) до sync", len(cmds))
+            print(f"[setup] tree_commands={len(cmds)} names={[c.name for c in cmds[:30]]}")
+        except Exception:
+            log.exception("Не удалось перечислить tree commands")
+
         try:
             synced = await self.tree.sync()
             log.info("Глобальная синхронизация: %s команд", len(synced))
@@ -227,23 +235,37 @@ class ProBot(commands.Bot):
             print("[sync][global] failed")
 
     async def on_ready(self):
-        log.info("Бот запущен: %s | серверов=%s | пользователей=%s", getattr(self.user, "name", "?"), len(self.guilds), len(self.users))
+        log.info(
+            "Бот запущен: %s | серверов=%s | пользователей=%s",
+            getattr(self.user, "name", "?"),
+            len(self.guilds),
+            len(self.users),
+        )
         print(f"[ready] user={getattr(self.user, 'name', '?')} guilds={len(self.guilds)}")
 
-        # Быстрая синхронизация слешей по серверам (обычно появляется сразу).
-        for g in list(self.guilds):
+        # Быстрый guild-sync: копируем глобальные команды на каждый сервер.
+        targets = target_guilds()
+        guild_objs = list(targets) if targets else [discord.Object(id=g.id) for g in self.guilds]
+        # плюс все сервера, где бот уже есть
+        seen = {getattr(x, "id", None) for x in guild_objs}
+        for g in self.guilds:
+            if g.id not in seen:
+                guild_objs.append(discord.Object(id=g.id))
+
+        for gobj in guild_objs:
             try:
-                synced = await self.tree.sync(guild=discord.Object(id=g.id))
-                log.info("Guild sync: %s (%s) — %s команд", g.name, g.id, len(synced))
-                print(f"[sync][guild] id={g.id} name={g.name} commands={len(synced)}")
+                self.tree.copy_global_to(guild=gobj)
+                synced = await self.tree.sync(guild=gobj)
+                log.info("Guild sync id=%s — %s команд", gobj.id, len(synced))
+                print(f"[sync][guild] id={gobj.id} commands={len(synced)}")
             except Exception:
-                log.exception("Guild sync failed: %s (%s)", g.name, g.id)
-                print(f"[sync][guild] failed id={g.id} name={g.name}")
+                log.exception("Guild sync failed id=%s", getattr(gobj, "id", "?"))
+                print(f"[sync][guild] failed id={getattr(gobj, 'id', '?')}")
 
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name=f'{len(self.guilds)} серверов | /help'
+                name=f"{len(self.guilds)} серверов | /help",
             )
         )
 
@@ -259,6 +281,31 @@ class ProBot(commands.Bot):
 
 
 bot = ProBot()
+
+
+
+
+@bot.tree.command(name='sync', description='Принудительно синхронизировать slash-команды (админ)')
+@discord.app_commands.default_permissions(administrator=True)
+async def sync_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if interaction.guild:
+            bot.tree.copy_global_to(guild=interaction.guild)
+            synced = await bot.tree.sync(guild=interaction.guild)
+            await interaction.followup.send(
+                f"✅ Синхронизировано **{len(synced)}** команд на этот сервер.\n"
+                f"Примеры: {', '.join('/' + c.name for c in synced[:15])}…",
+                ephemeral=True,
+            )
+        else:
+            synced = await bot.tree.sync()
+            await interaction.followup.send(
+                f"✅ Глобальный sync: **{len(synced)}** команд (может занять до часа).",
+                ephemeral=True,
+            )
+    except Exception as e:
+        await interaction.followup.send(f"❌ Ошибка sync: `{e}`", ephemeral=True)
 
 
 @bot.tree.command(name='help', description='Показать все команды бота')
